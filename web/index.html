@@ -14,8 +14,10 @@
   header { padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--border); display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
   header h1 { font-size:15px; margin:0; font-weight:600; }
   header .stats { color:var(--dim); font-size:12px; }
-  .daybtns button, .tgl, .zoombtn { background:#21262d; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:3px 9px; margin-right:4px; cursor:pointer; font-size:12px; }
-  .daybtns button.on { background:var(--blue); border-color:var(--blue); color:#0d1117; font-weight:600; }
+  .daybtns button, .tgl, .zoombtn, .lensbtn { background:#21262d; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:3px 9px; margin-right:4px; cursor:pointer; font-size:12px; }
+  .daybtns button.on, .lensbtn.on { background:var(--blue); border-color:var(--blue); color:#0d1117; font-weight:600; }
+  #crumb { color:var(--blue); cursor:pointer; font-size:12px; display:none; }
+  #crumb:hover { text-decoration:underline; }
   .tgl.on { background:var(--accent); border-color:var(--accent); color:#0d1117; }
   #search { background:#21262d; border:1px solid var(--border); color:var(--fg); border-radius:6px; padding:4px 8px; width:200px; }
   main { flex:1; display:flex; min-height:0; }
@@ -64,6 +66,12 @@
 <header>
   <h1>Cognitive Dynamics Engine</h1>
   <span class="stats" id="stats">loading…</span>
+  <span id="lensbtns">
+    <button class="lensbtn on" data-l="themes">themes</button>
+    <button class="lensbtn" data-l="causal">causal</button>
+    <button class="lensbtn" data-l="all">all</button>
+  </span>
+  <span id="crumb"></span>
   <span class="daybtns" id="daybtns"></span>
   <button class="tgl" id="tglsim">similarity</button>
   <button class="tgl" id="tglrej">rejected</button>
@@ -76,6 +84,7 @@
     <button class="zoombtn" data-z="day">day</button>
     <button class="zoombtn" data-z="hour">hour</button>
   </span>
+  <button class="tgl" id="btninsights">insights</button>
   <input id="search" placeholder="semantic search…">
   <a href="/web/trends.html" style="color:#58a6ff;font-size:12px;text-decoration:none">social graph →</a>
 </header>
@@ -100,6 +109,7 @@
 const $ = s => document.querySelector(s);
 let cy, curDays = "1-7", showSim = false, showRej = false, zoomLevel = "week";
 let lastData = null;
+let lens = "themes", curTheme = null, lastThemes = null, lastLinks = null;
 
 async function api(p) { const r = await fetch(p); return r.json(); }
 
@@ -231,14 +241,47 @@ const style = [
     'target-arrow-fill': '#bc8cff', 'opacity': 0.6, 'line-style': 'dashed'}},
   {selector: 'edge[status="rejected"]', style: {'line-color': '#f85149', 'width': 1,
     'line-style': 'dashed', 'opacity': 0.35, 'display': 'none'}},
+  {selector: 'node[type="THEME"]', style: {
+    'shape': 'ellipse', 'background-color': '#58a6ff', 'background-opacity': 0.18,
+    'border-width': 2, 'border-color': '#58a6ff',
+    'width': n => 30 + 9 * Math.sqrt(n.data('n_events') || 1),
+    'height': n => 30 + 9 * Math.sqrt(n.data('n_events') || 1),
+    'label': 'data(label)', 'font-size': 12, 'font-weight': 600, 'color': '#e6edf3',
+    'text-valign': 'center', 'text-wrap': 'wrap', 'text-max-width': '150px'}},
+  {selector: 'node.stub', style: {
+    'shape': 'round-rectangle', 'background-color': '#21262d',
+    'background-opacity': 1, 'border-color': '#6e7681',
+    'width': 96, 'height': 36, 'font-size': 9, 'font-weight': 400,
+    'text-max-width': '90px'}},
+  {selector: 'edge[relation="THEME_LINK"]', style: {
+    'line-color': e => (e.data('infl') || 0) > 0 ? '#f0883e' : '#58a6ff',
+    'target-arrow-fill': e => (e.data('infl') || 0) > 0 ? '#f0883e' : '#58a6ff',
+    'width': e => 1 + 2.5 * Math.log(1 + (e.data('n') || 1)),
+    'label': 'data(n)', 'font-size': 9, 'color': '#8b949e',
+    'text-rotation': 'autorotate', 'opacity': 0.8}},
+  {selector: 'edge[relation="CROSS_THEME"]', style: {
+    'line-color': '#6e7681', 'target-arrow-fill': '#6e7681',
+    'line-style': 'dashed', 'width': e => 1 + Math.log(1 + (e.data('n') || 1)),
+    'opacity': 0.45}},
   {selector: '.chain', style: {'line-color': '#ffd33d', 'target-arrow-fill': '#ffd33d',
     'width': 4, 'opacity': 1, 'z-index': 99}},
   {selector: 'node.chain', style: {'border-width': 3, 'border-color': '#ffd33d'}},
 ];
 
+function dayRange() {
+  if (curDays.includes("-")) {
+    const [a, b] = curDays.split("-", 2).map(Number);
+    return [a, b];
+  }
+  const d = +curDays;
+  return [d, d];
+}
+
 async function loadGraph() {
   document.querySelectorAll("#daybtns button").forEach(b =>
     b.classList.toggle("on", b.dataset.d === curDays));
+  if (lens === "themes") return loadThemes();
+  if (lens === "causal") return loadTheme();
   const d = await api(`/api/graph?subject=A1_JAKE&days=${curDays}`);
   lastData = d;
   const els = buildElements(d);
@@ -253,6 +296,7 @@ async function loadGraph() {
 }
 
 function updateVisibility() {
+  if (!cy) return;
   cy.edges('[relation="SIMILAR_TO"]').style('display', showSim ? 'element' : 'none');
   cy.edges('[status="rejected"]').style('display', showRej ? 'element' : 'none');
 }

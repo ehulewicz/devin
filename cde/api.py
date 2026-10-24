@@ -5,6 +5,7 @@ Run: uvicorn cde.api:app --port 8000
 import json
 import math
 import os
+import sqlite3
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -67,10 +68,16 @@ def graph(subject: str = "A1_JAKE", days: str = "1-7",
         (subject, lo, hi),
     ).fetchall()
     ev_ids = {e["id"] for e in evs}
+    try:
+        ev_theme = {r["event_id"]: r["theme_id"] for r in
+                    c.execute("SELECT event_id, theme_id FROM event_themes")}
+    except sqlite3.OperationalError:
+        ev_theme = {}
     nodes = [
         {"id": f"e{e['id']}", "type": "EVENT", "label": e["summary"][:60],
          "day": e["day"], "t": e["t_start"], "hour": (e["t_start"] % 86400) / 3600,
-         "mood": e["mood"], "recount": e["time_uncertain"]}
+         "mood": e["mood"], "recount": e["time_uncertain"],
+         "theme": ev_theme.get(e["id"])}
         for e in evs
     ]
 
@@ -305,6 +312,230 @@ def search(q: str, subject: str = "A1_JAKE", k: int = 12):
     return [{"score": round(s, 3), "id": e["id"], "day": e["day"],
              "t_start": e["t_start"], "summary": e["summary"], "mood": e["mood"]}
             for s, e in scored]
+
+
+# ---------- semantic zoom: themes -> causal -> full graph ----------
+
+def _theme_maps(c):
+    """event_id -> theme_id, theme_id -> row ({} if themes not built yet)."""
+    try:
+        et = {r["event_id"]: r["theme_id"]
+              for r in c.execute("SELECT event_id, theme_id FROM event_themes")}
+        th = {r["id"]: dict(r) for r in c.execute("SELECT * FROM themes")}
+    except sqlite3.OperationalError:
+        et, th = {}, {}
+    return et, th
+
+
+def _judged_edges(c):
+    return c.execute(
+        """SELECT * FROM edges WHERE src_type='EVENT' AND dst_type='EVENT'
+           AND relation IN ('INFLUENCES','REFERS_TO','SAME_THREAD')
+           AND status!='rejected'""").fetchall()
+
+
+def _theme_card(c, t, evs, jedges):
+    ids = [e["id"] for e in evs]
+    idset = set(ids)
+    ts = sorted(e["t_start"] for e in evs)
+    n = len(ts)
+    card = {"id": t["id"], "name": t["name"], "description": t["description"],
+            "n_events": n, "days": sorted({e["day"] for e in evs}),
+            "t_first": ts[0] if n else None, "t_last": ts[-1] if n else None,
+            "t_median": ((ts[n // 2] if n % 2 else (ts[n // 2 - 1] + ts[n // 2]) / 2)
+                         if n else None)}
+    ph = ",".join("?" * len(ids))
+    card["top_people"] = [[r["canonical"], r["n"]] for r in c.execute(
+        f"""SELECT e.canonical, COUNT(*) n FROM event_participants ep
+            JOIN entities e ON e.id=ep.entity_id
+            WHERE ep.event_id IN ({ph})
+            GROUP BY e.id ORDER BY n DESC LIMIT 3""", ids)] if ids else []
+    card["top_goals"] = [[r["id"], r["canonical"], r["n"]] for r in c.execute(
+        f"""SELECT e.id, e.canonical, COUNT(*) n FROM event_entities ee
+            JOIN entities e ON e.id=ee.entity_id
+            WHERE ee.relation='goal' AND ee.event_id IN ({ph})
+            GROUP BY e.id ORDER BY n DESC LIMIT 3""", ids)] if ids else []
+    card["moods"] = [[r["mood"], r["n"]] for r in c.execute(
+        f"""SELECT mood, COUNT(*) n FROM events
+            WHERE id IN ({ph}) AND mood IS NOT NULL
+            GROUP BY mood ORDER BY n DESC LIMIT 2""", ids)] if ids else []
+    card["n_causal"] = sum(
+        1 for r in jedges
+        if r["relation"] in ("INFLUENCES", "REFERS_TO")
+        and r["src_id"] in idset and r["dst_id"] in idset)
+    return card
+
+
+@app.get("/api/zoom/themes")
+def zoom_themes(subject: str = "A1_JAKE"):
+    c = con()
+    et, themes = _theme_maps(c)
+    evs = {e["id"]: e for e in c.execute(
+        "SELECT * FROM events WHERE subject=?", (subject,))}
+    by_theme = {}
+    for eid, tid in et.items():
+        if eid in evs:
+            by_theme.setdefault(tid, []).append(evs[eid])
+    jedges = _judged_edges(c)
+    out = [_theme_card(c, t, by_theme.get(tid, []), jedges)
+           for tid, t in sorted(
+               themes.items(),
+               key=lambda kv: kv[1]["rank"] if kv[1]["rank"] is not None else 1e9)]
+    links = {}
+    for r in jedges:
+        s, d = et.get(r["src_id"]), et.get(r["dst_id"])
+        if s is None or d is None or s == d:
+            continue
+        l = links.setdefault((s, d), {
+            "src": s, "dst": d, "n": 0,
+            "by_relation": {"INFLUENCES": 0, "REFERS_TO": 0, "SAME_THREAD": 0}})
+        l["n"] += 1
+        l["by_relation"][r["relation"]] += 1
+    c.close()
+    return {"themes": out, "links": list(links.values())}
+
+
+@app.get("/api/zoom/theme/{tid}")
+def zoom_theme(tid: int, subject: str = "A1_JAKE"):
+    c = con()
+    et, themes = _theme_maps(c)
+    t = themes.get(tid)
+    if not t:
+        c.close()
+        return {"error": "not found"}
+    evs = [e for e in c.execute(
+        "SELECT * FROM events WHERE subject=? ORDER BY t_start", (subject,))
+        if et.get(e["id"]) == tid]
+    ev_ids = {e["id"] for e in evs}
+    jedges = _judged_edges(c)
+    card = _theme_card(c, t, evs, jedges)
+    counts = {}
+    for t2 in et.values():
+        counts[t2] = counts.get(t2, 0) + 1
+    nodes = [{"id": f"e{e['id']}", "type": "EVENT",
+              "label": (e["summary"] or "")[:60], "day": e["day"],
+              "t": e["t_start"], "hour": (e["t_start"] % 86400) / 3600,
+              "mood": e["mood"], "recount": e["time_uncertain"], "theme": tid}
+             for e in evs]
+    edges = []
+    cross = {}
+    connected = set()
+    for r in jedges:
+        s_in, d_in = r["src_id"] in ev_ids, r["dst_id"] in ev_ids
+        if s_in and d_in:
+            edges.append({"id": f"edge-{r['id']}", "src": f"e{r['src_id']}",
+                          "dst": f"e{r['dst_id']}", "relation": r["relation"],
+                          "status": r["status"], "confidence": r["confidence"],
+                          "evidence_type": r["evidence_type"],
+                          "rationale": r["rationale"], "score": r["retrieval_score"]})
+        elif s_in != d_in:
+            other = et.get(r["dst_id"] if s_in else r["src_id"])
+            if other is None:
+                continue
+            connected.add(other)
+            key = (r["src_id"] if s_in else r["dst_id"], other, s_in)
+            cross[key] = cross.get(key, 0) + 1
+    for (eid, ot, out), k in sorted(cross.items()):
+        edges.append({"id": f"b-e{eid}-t{ot}" + ("" if out else "-in"),
+                      "src": f"e{eid}" if out else f"t{ot}",
+                      "dst": f"t{ot}" if out else f"e{eid}",
+                      "relation": "CROSS_THEME", "n": k})
+    for ot in sorted(connected):
+        nodes.append({"id": f"t{ot}", "type": "THEME",
+                      "label": themes[ot]["name"] if ot in themes else str(ot),
+                      "n_events": counts.get(ot, 0)})
+    # spine: longest intra-theme path over judged edges, DP in t_start order
+    pos = {e["id"]: i for i, e in enumerate(evs)}
+    preds = {}
+    for r in jedges:
+        if (r["src_id"] in pos and r["dst_id"] in pos
+                and pos[r["src_id"]] < pos[r["dst_id"]]):
+            preds.setdefault(r["dst_id"], []).append(r["src_id"])
+    dp, par = {}, {}
+    for e in evs:
+        i = e["id"]
+        best, bp = 0, None
+        for p in preds.get(i, []):
+            if dp[p] > best:
+                best, bp = dp[p], p
+        dp[i] = best + 1
+        par[i] = bp
+    spine = []
+    if dp:
+        i = max(dp, key=dp.get)
+        while i is not None:
+            spine.append(i)
+            i = par[i]
+        spine.reverse()
+    c.close()
+    return {"theme": card, "nodes": nodes, "edges": edges, "spine": spine}
+
+
+# ---------- insights ----------
+
+@app.get("/api/insights")
+def insights():
+    c = con()
+    try:
+        rows = c.execute("SELECT * FROM insights ORDER BY rank").fetchall()
+    except sqlite3.OperationalError:
+        c.close()
+        return []
+    out = [{"id": r["id"], "rank": r["rank"], "lens": r["lens"],
+            "title": r["title"], "body": r["body"], "status": r["status"],
+            "stat": json.loads(r["stat_json"] or "{}"),
+            "evidence": json.loads(r["evidence_json"] or "{}")} for r in rows]
+    c.close()
+    return out
+
+
+@app.get("/api/insight/{iid}")
+def insight(iid: int):
+    c = con()
+    try:
+        r = c.execute("SELECT * FROM insights WHERE id=?", (iid,)).fetchone()
+    except sqlite3.OperationalError:
+        r = None
+    if not r:
+        c.close()
+        return {"error": "not found"}
+    ev = json.loads(r["evidence_json"] or "{}")
+    ph = lambda xs: ",".join("?" * len(xs))  # noqa: E731
+    uids = ev.get("utterance_ids") or []
+    quotes = [dict(x) for x in c.execute(
+        f"""SELECT id, day, hms, speaker, text_en, text_zh FROM utterances
+            WHERE id IN ({ph(uids)}) ORDER BY t_abs LIMIT 12""", uids)] if uids else []
+    eids = ev.get("event_ids") or []
+    events = [{"id": x["id"], "day": x["day"],
+               "hms": f"{int(x['t_start'] % 86400 // 3600):02d}:"
+                      f"{int(x['t_start'] % 3600 // 60):02d}",
+               "summary": x["summary"]}
+              for x in c.execute(
+                  f"SELECT id, day, t_start, summary FROM events "
+                  f"WHERE id IN ({ph(eids)})", eids)] if eids else []
+    kedge = ev.get("edge_ids") or []
+    edges = []
+    esum = {}
+    rows = c.execute(f"SELECT * FROM edges WHERE id IN ({ph(kedge)})",
+                     kedge).fetchall() if kedge else []
+    for x in rows:
+        for i in (x["src_id"], x["dst_id"]):
+            if i not in esum:
+                s = c.execute("SELECT summary FROM events WHERE id=?", (i,)).fetchone()
+                esum[i] = s["summary"] if s else None
+        edges.append({"id": x["id"], "relation": x["relation"],
+                      "confidence": x["confidence"],
+                      "src": {"id": x["src_id"], "summary": esum[x["src_id"]]},
+                      "dst": {"id": x["dst_id"], "summary": esum[x["dst_id"]]}})
+    gids = ev.get("goal_ids") or []
+    goals = [dict(x) for x in c.execute(
+        f"SELECT id, canonical FROM entities WHERE id IN ({ph(gids)})",
+        gids)] if gids else []
+    c.close()
+    return {"id": r["id"], "rank": r["rank"], "lens": r["lens"],
+            "title": r["title"], "body": r["body"], "status": r["status"],
+            "stat": json.loads(r["stat_json"] or "{}"), "evidence": ev,
+            "quotes": quotes, "events": events, "edges": edges, "goals": goals}
 
 
 @app.get("/api/audio/status")

@@ -22,6 +22,7 @@ Usage:
     python -m cde.audio --event 1294         # pre-slice one event's evidence
     python -m cde.audio --probe <media>      # print voiced-span stats
 """
+import bisect
 import os
 import re
 import shutil
@@ -36,10 +37,15 @@ MEDIA_EXT = (".mp4", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".mkv", ".mov")
 
 # A1_JAKE_DAY1_11000000(.mp4).srt -> day=1, 11:00:00 file offset
 FILE_STAMP = re.compile(r"_DAY(\d+)_(\d{2})(\d{2})(\d{2})\d{2}")
+SRT_NAME = re.compile(r"(.+)_DAY(\d+)_\d{8}(?:\.mp4)?\.srt$")
+# raw media chunks: DAY1_A1_JAKE_11094208.mp4 -> day=1, subject=A1_JAKE, clip start 11:09:42
+MEDIA_STAMP = re.compile(r"^DAY(\d+)_(.+)_(\d{2})(\d{2})(\d{2})\d{2}$")
 PAD = 0.4          # seconds of context around each clip
 MAX_DUR = 25.0     # hard cap per clip
+CLIP_GAP = 45.0    # assumed coverage for the last chunk of a (day, subject) run
 
 _index = None      # media stem -> path
+_clips = None      # (day, subject) -> [(start_sec, path)] sorted
 _ffmpeg = None
 
 
@@ -84,6 +90,41 @@ def media_for_file(srt_name):
     return None
 
 
+def clip_index():
+    """(day, subject) -> [(in-day start sec, path)] for chunked media stems."""
+    global _clips
+    if _clips is None:
+        _clips = {}
+        for stem, path in media_index().items():
+            m = MEDIA_STAMP.match(stem)
+            if not m:
+                continue
+            sec = int(m.group(3)) * 3600 + int(m.group(4)) * 60 + int(m.group(5))
+            _clips.setdefault((int(m.group(1)), m.group(2)), []).append((sec, path))
+        for v in _clips.values():
+            v.sort()
+    return _clips
+
+
+def clip_for_time(srt_name, day, t_day):
+    """chunked-media lookup: clip covering in-day time t_day, else None."""
+    sm = SRT_NAME.search(srt_name)
+    if not sm:
+        return None
+    clips = clip_index().get((int(sm.group(2)), sm.group(1)))
+    if not clips:
+        return None
+    starts = [s for s, _ in clips]
+    i = bisect.bisect_right(starts, t_day) - 1
+    if i < 0:
+        return None
+    start, path = clips[i]
+    end = clips[i + 1][0] if i + 1 < len(clips) else start + CLIP_GAP
+    if t_day >= end + 2:
+        return None
+    return path, t_day - start
+
+
 def file_offset_seconds(srt_name):
     m = FILE_STAMP.search(srt_name)
     return int(m.group(2)) * 3600 + int(m.group(3)) * 60 + int(m.group(4)) if m else None
@@ -91,15 +132,23 @@ def file_offset_seconds(srt_name):
 
 def locate(u):
     """utterance row -> (media_path, in_file_start, duration) or None."""
+    dur = (u["t_end"] or u["t_abs"] + 1.5) - u["t_abs"]
+    if dur <= 0:
+        return None
+    t_day = u["t_abs"] - (u["day"] - 1) * 86400
     media = media_for_file(u["file"])
     off = file_offset_seconds(u["file"])
-    if not media or off is None:
+    if media and off is not None:
+        start = t_day - off
+        if start < -2:
+            return None
+        return media, max(start - PAD, 0.0), min(dur + 2 * PAD, MAX_DUR)
+    hit = clip_for_time(u["file"], u["day"], t_day)
+    if not hit:
         return None
-    start = u["t_abs"] - (u["day"] - 1) * 86400 - off
-    dur = (u["t_end"] or u["t_abs"] + 1.5) - u["t_abs"]
-    if start < -2 or dur <= 0:
-        return None
-    return media, max(start - PAD, 0.0), min(dur + 2 * PAD, MAX_DUR)
+    path, rel = hit
+    pad = min(PAD, rel)
+    return path, rel - pad, min(dur + pad + PAD, MAX_DUR)
 
 
 def clip_for_utterance(con, uid):
@@ -122,7 +171,7 @@ def clip_for_utterance(con, uid):
         [exe, "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", media,
          "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-f", "adts", out],
         capture_output=True, timeout=60)
-    if r.returncode != 0 or not os.path.exists(out):
+    if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 400:
         return None
     return out
 

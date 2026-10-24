@@ -160,6 +160,23 @@ CREATE TABLE IF NOT EXISTS pattern_occurrences(
     event_id INTEGER REFERENCES events(id),
     PRIMARY KEY(pattern_id, event_id)
 );
+
+-- semantic zoom L1: themes over goals -> events
+CREATE TABLE IF NOT EXISTS themes(
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    rank INTEGER
+);
+CREATE TABLE IF NOT EXISTS goal_themes(
+    goal_entity_id INTEGER PRIMARY KEY,
+    theme_id INTEGER
+);
+CREATE TABLE IF NOT EXISTS event_themes(
+    event_id INTEGER PRIMARY KEY,
+    theme_id INTEGER,
+    source TEXT                       -- 'goal' | 'embedding'
+);
 """
 
 
