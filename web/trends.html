@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>CDE — Social Graph & Trends</title>
+<title>CDE — Jake's Social World</title>
 <script src="cytoscape.min.js"></script>
 <script src="trends-data.js"></script>
 <style>
@@ -68,16 +68,17 @@
 </head>
 <body>
 <header>
-  <h1>Social Graph &amp; Trends</h1>
+  <h1>Jake's Social World <span style="color:var(--dim);font-size:11px;font-weight:400">— the cognitive graph lives in Jake's head; everyone below is analysed as part of his world</span></h1>
   <span>
     edge metric:
-    <button class="mbtn on" data-m="copresence">co-presence</button>
+    <button class="mbtn on" data-m="copresence">time together</button>
     <button class="mbtn" data-m="replies">replies</button>
-    <button class="mbtn" data-m="exposure">exposure</button>
+    <button class="mbtn" data-m="exposure">hearing each other</button>
+    <button class="mbtn" data-m="bond">bond (all-in-one)</button>
   </span>
   <button class="mbtn" id="fit">⤢ fit</button>
   <span id="uchips"></span>
-  <span class="hint">pick a person — they're the hub; orbit nodes = their connections (closer = stronger). Click an orbit node or link to zoom into the pair.</span>
+  <span class="hint">Jake is the subject — gold ring everywhere. Pick anyone to see them through Jake's data; orbit nodes sit closer when the bond is stronger.</span>
   <a class="mlink" href="/">event graph →</a>
 </header>
 <main>
@@ -130,59 +131,111 @@ for (let i = 0; i < WEARERS.length; i++)
     PAIRS.push(pairMetrics(WEARERS[i], WEARERS[j]));
 
 const METRICS = {
-  copresence: { get: p => p.shared,  label: "shared utterances", fmt: v => v },
-  replies:    { get: p => p.replies, label: "replies",           fmt: v => v },
-  exposure:   { get: p => p.exposure,label: "heard each other",  fmt: v => v },
+  copresence: { get: p => p.shared,  label: "time together (shared moments)", fmt: v => v },
+  replies:    { get: p => p.replies, label: "replies",                        fmt: v => v },
+  exposure:   { get: p => p.exposure,label: "heard each other",               fmt: v => v },
+  bond:       { get: p => p.bond,    label: "bond strength",                  fmt: v => v + "/100" },
 };
 let metric = "copresence";
 const maxFor = m => Math.max(...PAIRS.map(METRICS[m].get), 1);   // floor 1: no 0/0 norms
 
+// bond = blend of the three signals, 0–100; connectedness = a user's avg bond
+const [mxCp, mxRp, mxEx] = [maxFor("copresence"), maxFor("replies"), maxFor("exposure")];
+for (const p of PAIRS)
+  p.bond = Math.round(100 * (p.shared/mxCp + p.replies/mxRp + p.exposure/mxEx) / 3);
+const userBond = w => {
+  const rels = PAIRS.filter(p => p.w1 === w || p.w2 === w);
+  return Math.round(rels.reduce((s, p) => s + p.bond, 0) / rels.length);
+};
+
+// ---------- plain-English per-user summaries ----------
+function profile(w) {
+  const u = D.users[w];
+  const share = u.own_utterances / u.utterances_captured;
+  const rels = PAIRS.filter(p => p.w1 === w || p.w2 === w).sort((a, b) => b.bond - a.bond);
+  const best = rels[0], worst = rels[rels.length - 1];
+  const other = p => p.w1 === w ? p.w2 : p.w1;
+  const ov = userOvRate(w), end = u.active_span_hours[1];
+  const s = [
+    share >= 0.30 ? `Talks a lot — ${Math.round(100*share)}% of their recording is their own voice.`
+      : share < 0.21 ? `The quiet one — only ${Math.round(100*share)}% of their recording is their own voice.`
+      : `Moderately talkative (${Math.round(100*share)}% of the recording is them).`,
+    `Closest to ${NAME[other(best)]} — bond ${best.bond}/100.`,
+    `Furthest from ${NAME[other(worst)]} — bond ${worst.bond}/100.`,
+    ov > 0.40 ? `Jumps in early — ${Math.round(100*ov)}% of their replies start before the other person finishes.`
+      : ov < 0.28 ? `Rarely talks over people — only ${Math.round(100*ov)}% of replies overlap.`
+      : `Talks over people about as often as the group average (${Math.round(100*ov)}%).`,
+    `Recording ends around ${Math.round(end)}:00${end < 21 ? " — earlier than the group's ~22:00 wind-down" : ""}.`,
+  ];
+  if (u.monologue_max >= 35)
+    s.push(`Holds the floor — longest unbroken streak in the group (${u.monologue_max} utterances).`);
+  return s;
+}
+function roleTag(w) {
+  const rank = WEARERS.slice().sort((a,b) => userBond(b) - userBond(a)).indexOf(w);
+  const u = D.users[w], share = u.own_utterances / u.utterances_captured;
+  if (rank === 0) return "the hub — connected to everyone";
+  if (share < 0.21) return "the quiet center — always there, rarely heard";
+  if (u.active_span_hours[1] < 21) return "the early leaver";
+  if (rank === WEARERS.length - 1) return "the outlier — weakest ties overall";
+  return "a steady member of the group";
+}
+
 // ---------- narratives (from analysis/TRENDS.md) ----------
 const NOTES = {
   A1_JAKE: [
-    "Hub of the group: top-3 conversation partner for every other wearer; highest self-share of speech (34%).",
-    "Latest night of anyone (recording to 22:05); loud morning block 11–13, evening resume 17–20.",
-    "Most-captured other voice in all five transcripts — in Alice's and Tasha's files he's heard more than they hear themselves."],
+    "The most social person here — everyone recorded him, and in Alice's and Tasha's recordings he shows up more than they do themselves.",
+    "People talk to him more than he starts talking to them — consistent with someone everyone comes to for plans.",
+    "Awake and recording latest (past 22:00); busiest mid-morning and again 5–8pm."],
   A2_ALICE: [
-    "Quiet center: highest co-presence totals overall but lowest self-share (19%) and least airtime (~43 min) — always present, rarely heard.",
-    "Strongest pair bond in the dataset is Alice–Tasha (2,143 shared utterances / 9.5h) — and the most patient: 25–27% talk-over rate vs ~40% group norm.",
-    "Co-presence edges credit her correctly where extraction would miss her — argues for heard_by/WITNESSED edges."],
+    "Spends the most time physically with others but talks the least — she's around constantly, just quiet.",
+    "Her closest relationship is Tasha: they were side by side ~9.5 hours and rarely interrupt each other.",
+    "Because she's quiet, she barely shows up in conversations — but her recordings prove she was there."],
   A3_TASHA: [
-    "Connector: bridges Alice, Lucia, Katrina; mid-to-high engagement with everyone.",
-    "Alice⇄Tasha is the strongest non-Jake reply dyad (1,438 / 1,324).",
-    "Earliest recording end besides Shure's split — file stops 20:45."],
+    "Alice's closest companion, and a bridge to Lucia and Katrina — friendly with everybody.",
+    "No weak ties: every one of her relationships lands in the middle or higher.",
+    "Leaves earlier than the main group — recording stops ~20:45."],
   A4_LUCIA: [
-    "Jake's primary partner — Jake⇄Lucia is the single busiest dyad (3,684 combined replies).",
-    "Second-most-heard voice group-wide; strong independent ties to Katrina, Tasha, Alice.",
-    "Plausible co-runner of group logistics alongside Jake."],
+    "Jake's #1 conversation partner — they reply to each other more than any other pair (3,684 exchanges).",
+    "The second-most-heard voice in everyone's recordings.",
+    "Close with Katrina, Tasha and Alice too — not just 'Jake's partner'."],
   A5_KATRINA: [
-    "Steady mid-tier: lowest total capture (8,204) and the thinnest afternoon (81 utts at 14h).",
-    "Balanced ties — Lucia⇄Katrina and Shure⇄Katrina both ~900 replies each way.",
-    "Her afternoon lull reads as an individual off-camera stretch, not a group event."],
+    "Middle of the group on everything — no strongest or weakest relationship.",
+    "Recorded the least overall and had the emptiest afternoon (almost nothing 1–3pm).",
+    "That afternoon gap looks like personal downtime, not a group event."],
   A6_SHURE: [
-    "Semi-detached evenings: co-presence with every wearer ends ~18:37 while his recorder runs to 22:09.",
-    "17:00 spike is the largest single hour anywhere (2,144 captured — a big group moment).",
-    "Holds the floor longest: 42-utterance monologue streak, the group's max.",
-    "Only file containing 'Shure's GF' (382) and 'Sister' (57) — a private social thread outside the group."],
+    "Leaves the group every evening ~6:37pm, though his recorder keeps going until ~10pm.",
+    "Has a private social life nobody else sees — 'Shure's girlfriend' and 'Sister' appear only in his recording.",
+    "5pm is the loudest hour anyone recorded (2,144 utterances — a big group moment he's in).",
+    "When he does talk, he keeps going — the group's longest unbroken streak (42 utterances)."],
 };
 const ASSUMED = {
-  A1_JAKE: "Week: extracted goals (party/BBQ, auction, schedule rework) are group-facing — likely remains coordination hub; surviving INFLUENCES hypotheses mostly radiate from his plans.",
-  A2_ALICE: "Week: stable sub-thread with Tasha inside the group graph; expect shared events to cluster together.",
-  A3_TASHA: "Week: Alice–Tasha pairing persists as a sub-thread; her earlier departures may repeat.",
-  A4_LUCIA: "Week: second node of the social core; day-3 grill rehearsal / day-4 BBQ replan likely co-run with Jake.",
-  A5_KATRINA: "Week: mid-core member; afternoon off-camera stretches may recur.",
-  A6_SHURE: "Week: recurring evening splits + GF/sister events form a parallel thread in his part of the graph.",
+  A1_JAKE: "He probably stays the organizer all week — the plans he starts early (the party, the barbecue, the schedule changes) are what later events keep tracing back to.",
+  A2_ALICE: "She likely stays Tasha's quiet partner all week — present at shared moments, easy to miss because she rarely speaks.",
+  A3_TASHA: "The Alice–Tasha pairing probably holds all week; expect her early nights to repeat.",
+  A4_LUCIA: "She probably keeps co-running things with Jake — the mid-week replanning (grill rehearsal, BBQ reschedule) reads like shared logistics.",
+  A5_KATRINA: "She probably stays a steady mid-level member; quiet afternoons like day 1's may recur.",
+  A6_SHURE: "Expect the evening exits and the girlfriend/sister thread to keep repeating — he lives a second social life the group doesn't see.",
+};
+// how the Jake-only cognitive graph biases what we can say about each person
+const JAKEY = {
+  A1_JAKE: "This is Jake's head: every event, goal and 'influence' link is something his own recorder heard — blind spots exist wherever he wasn't present.",
+  A2_ALICE: "Through Jake's ears Alice is easy to underestimate — she's next to him constantly but speaks little, and anything she said outside his earshot never reached the graph.",
+  A3_TASHA: "Jake sees Tasha as a solid mid-tier partner — but her deepest bond is with Alice, and much of it happens where Jake can't hear, so his view understates it.",
+  A4_LUCIA: "Lucia may look more central than she is — she's next to Jake so often that his graph records almost everything she does with the group.",
+  A5_KATRINA: "Katrina looks peripheral partly because Jake shares less time with her — her own recording shows a steadier member than Jake's view implies.",
+  A6_SHURE: "Shure's evenings (~18:37 on) are a blind spot — Jake's recorder can't corroborate the girlfriend/sister thread, so treat Shure's presence here as a floor, not a ceiling.",
 };
 
 // ---------- graph ----------
-let cy, curUser = null;              // null = group mesh; wearer code = ego star
+let cy, curUser = "A1_JAKE";         // Jake's perspective by default; null = group mesh
 const maxOwn = Math.max(...WEARERS.map(w => D.users[w].own_utterances));
 
 const CY_STYLE = [
   { selector: "node", style: {
       "background-color": n => COLOR[n.data("wearer")],
-      "width": n => n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn),
-      "height": n => n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn),
+      "width": n => (n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn)) * (n.data("subject") ? 1.35 : 1),
+      "height": n => (n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn)) * (n.data("subject") ? 1.35 : 1),
       "label": n => n.data("name") + "\n" + n.data("own") + " utts",
       "color": "#e6edf3", "font-size": 11, "text-valign": "bottom",
       "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": "90px",
@@ -190,6 +243,8 @@ const CY_STYLE = [
   { selector: "node[?hub]", style: {
       "font-size": 15, "font-weight": 700, "border-width": 4,
       "border-color": "#ffd33d" }},
+  { selector: "node[?subject]", style: {   // Jake: gold ring in every view
+      "border-width": 4, "border-color": "#ffd33d", "font-weight": 700 }},
   { selector: "edge", style: {
       "width": e => 1 + 11 * e.data("norm"),
       "line-color": "#3d444d", "opacity": 0.75,
@@ -212,7 +267,8 @@ function buildGraph() {
     for (const w of WEARERS) {
       const u = D.users[w];
       els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
-                         own: u.own_utterances, captured: u.utterances_captured }});
+                         own: u.own_utterances, captured: u.utterances_captured,
+                         subject: w === "A1_JAKE" ? 1 : 0 }});
     }
     for (const p of PAIRS) {
       const v = METRICS[metric].get(p);
@@ -224,7 +280,7 @@ function buildGraph() {
     const hub = D.users[curUser];
     els.push({ data: { id: CODE[curUser], name: NAME[curUser], wearer: curUser,
                        own: hub.own_utterances, captured: hub.utterances_captured,
-                       hub: 1 },
+                       hub: 1, subject: curUser === "A1_JAKE" ? 1 : 0 },
                position: { x: 0, y: 0 }});
     const others = WEARERS.filter(w => w !== curUser);
     others.forEach((w, i) => {
@@ -235,7 +291,7 @@ function buildGraph() {
       const u = D.users[w];
       els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
                          own: u.own_utterances, captured: u.utterances_captured,
-                         norm },
+                         norm, subject: w === "A1_JAKE" ? 1 : 0 },
                  position: { x: rad * Math.cos(ang), y: rad * Math.sin(ang) }});
       els.push({ data: { id: "p" + p.key, source: CODE[curUser], target: CODE[w],
                          pair: p.key, v, norm, ego: 1 }});
@@ -277,7 +333,13 @@ function setUser(w) {
   all.textContent = "group"; all.className = "mbtn uchip"; all.dataset.u = "";
   all.onclick = () => setUser(null);
   box.appendChild(all);
+  const jb = document.createElement("button");            // Jake first, starred
+  jb.textContent = "★ Jake"; jb.className = "mbtn uchip"; jb.dataset.u = "A1_JAKE";
+  jb.style.borderColor = COLOR.A1_JAKE; jb.style.fontWeight = "700";
+  jb.onclick = () => setUser("A1_JAKE");
+  box.appendChild(jb);
   for (const w of WEARERS) {
+    if (w === "A1_JAKE") continue;
     const b = document.createElement("button");
     b.textContent = NAME[w]; b.className = "mbtn uchip"; b.dataset.u = w;
     b.style.borderColor = COLOR[w];
@@ -373,34 +435,54 @@ function groupRhythm() {
 }
 
 function showOverview() {
-  const sorted = PAIRS.slice().sort((a,b)=>b.shared-a.shared);
-  const best = sorted[0], early = sorted.filter(p => p.span < 8);
+  const byBond = PAIRS.slice().sort((a,b) => b.bond - a.bond);
+  const best = byBond[0];
+  const patient = PAIRS.slice().sort((a,b) =>
+    (ovRate(a.ov1,a.n1)+ovRate(a.ov2,a.n2)) - (ovRate(b.ov1,b.n1)+ovRate(b.ov2,b.n2)))[0];
+  const early = PAIRS.filter(p => p.span < 8);
+  const earlyWearers = [...new Set(early.flatMap(p => [p.w1, p.w2]))];
   const talkiest = WEARERS.slice().sort((a,b) => userOvRate(b) - userOvRate(a))[0];
   const mostVoiced = WEARERS.slice().sort((a,b) => D.users[b].voiced_s - D.users[a].voiced_s)[0];
+  const roster = WEARERS.slice().sort((a,b) => userBond(b) - userBond(a));
   $("#inspector").innerHTML = `
     <h2>Group overview — day 1</h2>
     <div class="meta">6 wearers · ${Object.values(D.users).reduce((s,u)=>s+u.utterances_captured,0).toLocaleString()}
-      utterances captured · edge metric: <b>${METRICS[metric].label}</b></div>
+      utterances recorded · edge metric: <b>${METRICS[metric].label}</b></div>
+    <div class="note" style="border-left-color:#ffd33d"><b>★ Jake is the subject.</b>
+      The cognitive engine models the week from Jake's head — events, plans and
+      influences are what his recorder heard. Everyone else's recordings serve as
+      supporting evidence: how the people around Jake actually behaved. Anything
+      that happened away from Jake's mic is invisible to his graph.</div>
+    <h3>who's who</h3>
+    ${roster.map(w => `<div class="pairrow" data-u="${w}">
+      <span style="color:${COLOR[w]}"><b>${NAME[w]}</b> — ${roleTag(w)}</span>
+      <span class="v">${userBond(w)}/100</span></div>`).join("")}
     <h3>group rhythm (all wearers)</h3>
     ${groupRhythm()}
-    <div class="note">Universal capture gap ~14:30–17:00 in all six files — a scheduled break, not six
-      coincidences. Loud group block 17–19, taper after 20.</div>
+    <div class="note">Everyone's recording goes quiet ~14:30–17:00 — a scheduled break, not six
+      coincidences. Loud group block 17–19, tapering after 20:00.</div>
     <h3>pairs by ${METRICS[metric].label}</h3>
     ${pairTable()}
     <div class="note">Strongest bond: <b>${NAME[best.w1]} ⇄ ${NAME[best.w2]}</b>
-      (${best.shared.toLocaleString()} shared utterances / ${best.span}h) — also the
-      most patient dyad: ${Math.round(100*ovRate(best.ov1,best.n1))}%/${Math.round(100*ovRate(best.ov2,best.n2))}%
-      talk-over rate vs ~40% group norm.</div>
-    ${early.length ? `<div class="note">Every Shure pair caps at ~7.5h and ends ~18:37 — he splits off
-      from the group each evening while his recorder keeps running.</div>` : ""}
-    <div class="note"><b>${NAME[mostVoiced]}</b> holds the most airtime
-      (${Math.round(D.users[mostVoiced].voiced_s/60)} min) ·
-      <b>${NAME[talkiest]}</b> talks over others most
-      (${Math.round(100*userOvRate(talkiest))}% of exchanges).</div>
+      (${best.bond}/100 blended, ${best.shared.toLocaleString()} shared moments over ${best.span}h).</div>
+    <div class="note">Most patient pair: <b>${NAME[patient.w1]} ⇄ ${NAME[patient.w2]}</b> —
+      ${Math.round(100*ovRate(patient.ov1,patient.n1))}%/${Math.round(100*ovRate(patient.ov2,patient.n2))}%
+      of their replies overlap vs ${Math.round(100*PAIRS.reduce((s,p)=>s+(ovRate(p.ov1,p.n1)+ovRate(p.ov2,p.n2))/2,0)/PAIRS.length)}%
+      group average.</div>
+    ${early.length ? `<div class="note">${earlyWearers.map(w=>NAME[w]).join(" and ")}
+      ${earlyWearers.length === 1 ? "leaves" : "leave"} the group early — every pair involving them
+      ends ~${Math.round(Math.max(...early.map(p=>p.last)))}:30 while other recordings run past 20:00.</div>` : ""}
+    <div class="note"><b>${NAME[mostVoiced]}</b> talks the most
+      (${Math.round(D.users[mostVoiced].voiced_s/60)} min of own speech) ·
+      <b>${NAME[talkiest]}</b> interrupts most
+      (${Math.round(100*userOvRate(talkiest))}% of replies).</div>
     <div class="note assumed"><span class="tag">ASSUMED · WEEK</span><br>
-      Graph stats from Jake's extracted week: 9 INFLUENCES hypotheses, 299 SAME_THREAD, 163 canonical
-      goals — recurring threads (party/BBQ, auction, schedule) seeded early resolve into the day-7 event.</div>`;
+      In the extracted week-graph, 9 judged cause-ish links, 299 same-thread links and 163 recurring
+      goals survive — most radiate from plans Jake made early, so the group's threads likely stay
+      organized around him.</div>`;
   bindPairRows();
+  document.querySelectorAll(".pairrow[data-u]").forEach(r =>
+    r.onclick = () => setUser(r.dataset.u));
 }
 
 function showUser(w) {
@@ -412,9 +494,11 @@ function showUser(w) {
     .sort((a,b) => METRICS[metric].get(b) - METRICS[metric].get(a));
   const heardMax = heard.length ? heard[0][1] : 1;
   $("#inspector").innerHTML = `
-    <h2 style="color:${COLOR[w]}">${NAME[w]} <span style="color:var(--dim);font-size:12px">${w}</span></h2>
-    <div class="meta">day 1 · active ${u.active_span_hours[0]}:00–${u.active_span_hours[1]}:00</div>
+    <h2 style="color:${COLOR[w]}">${NAME[w]}${w === "A1_JAKE" ? ' <span style="color:#ffd33d">★ subject</span>' : ""} <span style="color:var(--dim);font-size:12px">${w}</span></h2>
+    <div class="meta">${roleTag(w)} · day 1 · active ${u.active_span_hours[0]}:00–${u.active_span_hours[1]}:00
+      ${w !== "A1_JAKE" ? " · <i>as seen through Jake's data</i>" : ""}</div>
     <div class="statgrid">
+      <div class="stat"><b>${userBond(w)}/100</b>connectedness</div>
       <div class="stat"><b>${u.utterances_captured.toLocaleString()}</b>captured</div>
       <div class="stat"><b>${u.own_utterances.toLocaleString()}</b>own speech</div>
       <div class="stat"><b>${share}%</b>self-share</div>
@@ -422,9 +506,11 @@ function showUser(w) {
       <div class="stat"><b>${u.monologue_max}</b>longest streak</div>
       <div class="stat"><b>${Math.round(100*userOvRate(w))}%</b>talk-over rate</div>
     </div>
+    <h3>in plain words</h3>
+    <ul class="tight">${profile(w).map(s => `<li>${s}</li>`).join("")}</ul>
     <h3>hourly activity</h3>
     ${bar(u)}
-    <h3>voices heard (exposure)</h3>
+    <h3>voices in their day</h3>
     ${hbars(heard)}
     <h3>relationships — by ${METRICS[metric].label}</h3>
     ${rels.map(p => {
@@ -434,9 +520,11 @@ function showUser(w) {
         <span style="color:${COLOR[other]}">⇄ ${NAME[other]}</span>
         <span class="v">${METRICS[metric].fmt(v)}</span></div>`;
     }).join("")}
-    <h3>trend notes</h3>
+    <h3>what stands out</h3>
     <ul class="tight">${NOTES[w].map(n => `<li>${n}</li>`).join("")}</ul>
-    <div class="note assumed"><span class="tag">ASSUMED · WEEK</span><br>${ASSUMED[w]}</div>
+    <div class="note assumed"><span class="tag">GUESS FOR THE WEEK</span><br>${ASSUMED[w]}</div>
+    <div class="note assumed" style="border-left-color:var(--red)">
+      <span class="tag" style="color:var(--red)">JAKE'S-VIEW BIAS</span><br>${JAKEY[w]}</div>
     <button class="backbtn" onclick="setUser(null)">← group view</button>`;
   bindPairRows();
 }
@@ -454,16 +542,17 @@ const userOvRate = w => {   // talk-overs committed / all that member's exchange
 function showPair(p) {
   const rTot = p.r12 + p.r21 || 1, hTot = p.heard12 + p.heard21 || 1;
   const spanNote = p.span < 8
-    ? `<div class="note">Short overlap (${p.span}h, ending ~${p.last}) — shorter than the group's
-       ~10.9h typical span: one of the two left the shared space early.</div>` : "";
-  const rank = 1 + PAIRS.slice().sort((a,b)=>b.shared-a.shared).findIndex(x=>x.key===p.key);
+    ? `<div class="note">They only overlapped ${p.span}h, ending ~${p.last} — the group's
+       typical pair runs ~10.9h, so one of them peeled off early.</div>` : "";
+  const rank = 1 + PAIRS.slice().sort((a,b)=>b.bond-a.bond).findIndex(x=>x.key===p.key);
   $("#inspector").innerHTML = `
     <h2><span style="color:${COLOR[p.w1]}">${NAME[p.w1]}</span> ⇄
         <span style="color:${COLOR[p.w2]}">${NAME[p.w2]}</span></h2>
-    <div class="meta">pair detail · day 1 · co-presence rank #${rank} of 15</div>
+    <div class="meta">pair detail · day 1 · bond rank #${rank} of 15</div>
     <div class="statgrid">
-      <div class="stat"><b>${p.shared.toLocaleString()}</b>shared utterances</div>
-      <div class="stat"><b>${p.span}h</b>overlap ${p.first}–${p.last}</div>
+      <div class="stat"><b>${p.bond}/100</b>bond</div>
+      <div class="stat"><b>${p.shared.toLocaleString()}</b>shared moments</div>
+      <div class="stat"><b>${p.span}h</b>together ${p.first}–${p.last}</div>
     </div>
     <h3>exchanges — speaker → responder</h3>
     <div class="hbar"><span class="nm">${NAME[p.w1]} → ${NAME[p.w2]}</span>
@@ -472,14 +561,14 @@ function showPair(p) {
     <div class="hbar"><span class="nm">${NAME[p.w2]} → ${NAME[p.w1]}</span>
       <span class="tr"><span class="fl own" style="width:${Math.round(100*p.r21/rTot)}%"></span></span>
       <span class="vl">${p.r21}</span></div>
-    <h3>exposure — how much of the other's voice each captured</h3>
+    <h3>how much of each other's day each heard</h3>
     <div class="hbar"><span class="nm">${NAME[p.w1]} heard</span>
       <span class="tr"><span class="fl green" style="width:${Math.round(100*p.heard12/hTot)}%"></span></span>
       <span class="vl">${p.heard12}</span></div>
     <div class="hbar"><span class="nm">${NAME[p.w2]} heard</span>
       <span class="tr"><span class="fl green" style="width:${Math.round(100*p.heard21/hTot)}%"></span></span>
       <span class="vl">${p.heard21}</span></div>
-    <h3>timing — reply latency &amp; talk-overs</h3>
+    <h3>timing — how fast they reply &amp; who jumps in</h3>
     <div class="hbar"><span class="nm">${NAME[p.w1]} replies</span>
       <span class="tr"><span class="fl" style="width:${Math.round(100*(p.lat1||0)/3)}%"></span></span>
       <span class="vl">${p.lat1 != null ? p.lat1 + "s" : "—"}</span></div>
@@ -492,12 +581,12 @@ function showPair(p) {
     <div class="hbar"><span class="nm">${NAME[p.w2]} talks over</span>
       <span class="tr"><span class="fl green" style="width:${Math.round(100*ovRate(p.ov2,p.n2))}%"></span></span>
       <span class="vl">${Math.round(100*ovRate(p.ov2,p.n2))}%</span></div>
-    <div class="legendrow">latency = median gap before replying (floored by 1s SRT
-      resolution — <code>--audio</code> VAD refines) · talk-over = started before
-      the other finished (${p.ov1 + p.ov2} events)</div>
+    <div class="legendrow">latency = typical wait before replying (transcript time
+      is rounded to whole seconds, so 1.0s is the floor) · talk-over = started
+      talking before the other finished (${p.ov1 + p.ov2} times)</div>
     ${spanNote}
-    <div class="note">Reply counts are amplified ~3–4× because every nearby recorder captures the same
-      exchange — read the <i>ratio</i> between directions, not the absolute numbers.</div>
+    <div class="note">Every recorder nearby captures the same exchange, so reply counts
+      are inflated ~3–4× — compare the two directions against each other, not the raw totals.</div>
     <button class="backbtn" onclick="resetView()">← back to ${curUser ? NAME[curUser] : "group"}</button>
     <button class="backbtn" style="border-color:${COLOR[p.w1]}" onclick="setUser('${p.w1}')">◉ center on ${NAME[p.w1]}</button>
     <button class="backbtn" style="border-color:${COLOR[p.w2]}" onclick="setUser('${p.w2}')">◉ center on ${NAME[p.w2]}</button>`;
