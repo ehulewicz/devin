@@ -1,6 +1,6 @@
 # Handoff — CDE pipeline state and next steps
 
-Context: `SPEC.md` is the build spec; §8 (new) documents dataset signals the
+Context: `SPEC.md` is the build spec; §8 documents dataset signals the
 pipeline doesn't use and the agreed priority for adding them.
 
 ## Where the pipeline stands (data/cde.db)
@@ -8,29 +8,40 @@ pipeline doesn't use and the agreed priority for adding them.
 | Stage | Status |
 |---|---|
 | ingest | done — 300,940 utterances (Jake: 56,638 / 74 hour-files) |
-| extract | done — 73/74 cached files in `data/extracted/` (only DAY6_21000000 missing), 647 events, 2,930 mentions |
-| embed | re-running — LLM goal-canonicalization pass in flight (raw cosine clustering produced 679 micro-goals; merging into recurring threads) |
-| link | done — deterministic + 400 pairs judged; verdicts cached in `data/judged.json` so reruns replay free |
+| extract | done — 74/74 cached files in `data/extracted/`, 655 events, ~2,930 mentions |
+| embed | done — OpenAI `text-embedding-3-small` (1,536-dim); goals LLM-canonicalized then merge-passed to 163 entities |
+| link | done — deterministic + 400 pairs judged by `gpt-4o-mini` with positional quote citation; verdicts cached in `data/judged.json` so reruns replay free |
 | patterns | done (stretch) — 12 named clusters + occurrences; PATTERN→PATTERN edges dropped (all pairs trivially "recur daily") |
 
-Edge counts: SPOKE 53,313 · EXPRESSES 2,930 · PARTICIPATED_IN 2,785 ·
-PRECEDES 640 · ADVANCES_GOAL 690 · SIMILAR_TO 192 · **INFLUENCES 47
-(hypothesis) · REFERS_TO 19 · SAME_THREAD 224 · rejected 110**.
+Edge counts: SPOKE 53,313 · EXPRESSES 3,014 · PARTICIPATED_IN 2,810 ·
+PRECEDES 648 · ADVANCES_GOAL 733 · SIMILAR_TO 249 · **INFLUENCES 9
+(hypothesis) · REFERS_TO 1 · SAME_THREAD 299 · rejected 91**.
+Grounding: 81/309 accepted judged edges carry cited utterance ids (26%);
+all 9 INFLUENCES have evidence.
 
 ## Blocking next step — none; pipeline is complete end-to-end
 
-Money shot verified: `GET /api/chain?event_id=1073` — day-6 "Jake revises the
-delayed schedule" traces 4 hops: REFERS_TO→day-4 schedule review,
-SAME_THREAD→day-1 timeline draft, INFLUENCES→day-1 3 PM plan,
-INFLUENCES→day-1 auction proposal, each hop carrying supporting utterance ids.
-Also `event_id=1077` (day-6 auction → day-1 proposal, INFLUENCES conf 0.94).
+`/api/chain` orders predecessor hops by relation type (INFLUENCES/REFERS_TO
+first), then evidence presence, then confidence — so traced chains prefer
+evidence-backed causal hops.
 
-Backend note: `llm.py` order is OpenAI → `codex exec` → `claude -p`; Claude
-hit its session limit ~14:20 (resets 5:30pm ET) so everything after ran on
-codex. `CDE_BACKEND` in `.env` forces a backend.
+Verified demo chains:
+- `event_id=1294` — day-2 coffee/milk count ← INFLUENCES day-1 baking
+  guidance (quote: "The key was your guidance and experience") ← SAME_THREAD
+  day-1 cream piping.
+- `event_id=1812` — day-7 expense totaling ← INFLUENCES day-5 reimbursement
+  discussion (2 quotes).
+- `event_id=1586` — day-4 barbecue replan ← INFLUENCES day-3 grill rehearsal.
+- `event_id=1636` — day-5 steak/dough prep ← SAME_THREAD d4 ← SAME_THREAD d3,
+  quotes on both hops.
 
-UI: http://127.0.0.1:8000 — "▶ replay" animates the hour-by-hour build for the
-demo video; event 1073 + Trace back is the walkthrough.
+Backend note: OpenAI key in `.env` — backend order OpenAI → `codex exec` →
+`claude -p`; `CDE_BACKEND` forces one. gpt-4o-mini judges stricter than
+codex did (fewer INFLUENCES, more rejections); the positional-quote-cite
+prompt now requires cited evidence or INFLUENCES downgrades to SAME_THREAD.
+
+UI: http://127.0.0.1:8000 — "▶ replay" animates the hour-by-hour build for
+the demo video; event 1294 or 1812 + Trace back is the walkthrough.
 
 ## Agreed priorities for dataset signals (SPEC.md §8)
 

@@ -201,12 +201,16 @@ def chain(event_id: int = Query(...), max_hops: int = 30):
     cur_id = event_id
     for _ in range(max_hops):
         r = c.execute(
-            """SELECT e.*, s.t_start st, s.summary ss, s.day sd FROM edges e
+            """SELECT e.*, s.t_start st, s.summary ss, s.day sd,
+                      (SELECT COUNT(*) FROM edge_evidence x WHERE x.edge_id=e.id) nev
+               FROM edges e
                JOIN events s ON s.id=e.src_id
                WHERE e.dst_type='EVENT' AND e.dst_id=? AND e.src_type='EVENT'
                AND e.relation IN ('INFLUENCES','REFERS_TO','SAME_THREAD')
                AND e.status!='rejected'
-               ORDER BY e.confidence DESC, s.t_start LIMIT 1""",
+               ORDER BY e.relation IN ('INFLUENCES','REFERS_TO') DESC,
+                        nev > 0 DESC, e.confidence DESC, s.t_start
+               LIMIT 1""",
             (cur_id,),
         ).fetchone()
         if not r or r["src_id"] in seen:

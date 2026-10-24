@@ -242,14 +242,18 @@ The subject is one person wearing a camera for a week. Event A is earlier, event
 For EACH pair below reply with one JSON object in a list:
 {"pair": <n>, "relation": "INFLUENCES"|"REFERS_TO"|"SAME_THREAD"|"NONE",
  "direction": "A->B", "evidence_type": "self_report"|"transcript"|"temporal"|"semantic"|null,
- "supporting_utterance_ids": [int], "reason": str <=30 words,
+ "supporting_quote_indices": [int], "reason": str <=30 words,
  "alternative_explanations": [str], "confidence": 0-1}
 
-- INFLUENCES: A plausibly shaped/caused B (mood, plan, decision carried forward). Requires at least one supporting utterance id from either event's quotes — prefer self_report (someone states the link) or transcript (quotes show the thread).
+Quote indices: each event's quotes are numbered [0]…[7] for event A and [8]…[15]
+for event B. Cite the indices of the specific quotes that support your verdict —
+at least one for INFLUENCES/REFERS_TO.
+
+- INFLUENCES: A plausibly shaped/caused B (mood, plan, decision carried forward). Requires at least one supporting quote index — prefer self_report (someone states the link) or transcript (quotes show the thread).
 - REFERS_TO: someone in B explicitly talks about A.
 - SAME_THREAD: same project/relationship/thread, no explicit causal link.
 - NONE: only superficial similarity. Abstain rather than guess.
-- Only cite utterance ids shown in the pair's quotes.
+- Only cite quote indices shown in the pair's quotes.
 
 PAIRS:
 @@PAIRS@@
@@ -285,13 +289,27 @@ def judge(con, evs, pairs, max_pairs=400):
         A, B = by_id[a], by_id[b]
         rel = str(r.get("relation", "NONE")).upper()
         etype = r.get("evidence_type")
-        ev_ids = r.get("supporting_utterance_ids") or []
         if A["t_start"] >= B["t_start"]:
             rel = "NONE"
             r["reason"] = "rejected: source not earlier than target"
+        shown_a = event_utterances(con, a, 8)
+        shown_b = event_utterances(con, b, 8)
+        shown = shown_a + shown_b
         valid = {u["id"] for u in event_utterances(con, a, 100)} | \
                 {u["id"] for u in event_utterances(con, b, 100)}
-        ev_ids = [u for u in ev_ids if u in valid]
+        raw_ids = r.get("supporting_quote_indices")
+        if raw_ids is None:
+            raw_ids = r.get("supporting_utterance_ids") or []
+        ev_ids = []
+        for i in raw_ids:
+            if not isinstance(i, (int, float)):
+                continue
+            i = int(i)
+            if i in valid:                    # real utterance id
+                ev_ids.append(i)
+            elif 0 <= i < len(shown):         # positional cite into shown quotes
+                ev_ids.append(shown[i]["id"])
+        ev_ids = sorted(set(ev_ids))
         if rel == "INFLUENCES" and (etype not in ("self_report", "transcript") or not ev_ids):
             rel, stats["downgraded"] = "SAME_THREAD", stats["downgraded"] + 1
             r["reason"] = (r.get("reason") or "") + " [downgraded: no cited evidence]"
@@ -320,10 +338,10 @@ def judge(con, evs, pairs, max_pairs=400):
         print(f"replayed {len(done_pairs)} cached verdicts", flush=True)
     items = [kv for kv in items if kv[0] not in done_pairs]
 
-    def fmt(c2, e):
+    def fmt(c2, e, qbase=0):
         utts = event_utterances(c2, e["id"])
-        q = "\n".join(f'    u{u["id"]} {u["hms"]} {u["speaker"]}: {(u["text_en"] or "")[:120]}'
-                      for u in utts)
+        q = "\n".join(f'    [{qbase + i}] {u["hms"]} {u["speaker"]}: {(u["text_en"] or "")[:120]}'
+                      for i, u in enumerate(utts))
         return (f'event_id={e["id"]} day{e["day"]} t={e["t_start"]:.0f} '
                 f'summary="{e["summary"]}" mood={e["mood"]}\n{q}')
 
@@ -335,7 +353,7 @@ def judge(con, evs, pairs, max_pairs=400):
             ptxt = []
             for n, ((a, b), s) in enumerate(batch):
                 ptxt.append(f"--- pair {n} (retrieval_score={s}) ---\n"
-                            f"A: {fmt(c2, by_id[a])}\nB: {fmt(c2, by_id[b])}")
+                            f"A: {fmt(c2, by_id[a], 0)}\nB: {fmt(c2, by_id[b], 8)}")
             return llm.chat_json(JUDGE_PROMPT.replace("@@PAIRS@@", "\n".join(ptxt)))
         finally:
             c2.close()

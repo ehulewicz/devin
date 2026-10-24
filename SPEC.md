@@ -184,13 +184,15 @@ precision; the judge is the precision stage.
 ### 4c. LLM edge judge
 
 Candidates batched ≤10 pairs/call (6 parallel workers). Each pair is shown as
-both events' summaries, moods, times, and up to 8 evidence utterances with
-utterance ids. Per pair the model returns:
+both events' summaries, moods, times, and up to 8 evidence utterances numbered
+[0]–[7] for event A and [8]–[15] for event B (positional citation — models
+cite small indices far more reliably than raw utterance ids; they map back
+deterministically). Per pair the model returns:
 
 ```
 {pair, relation: INFLUENCES|REFERS_TO|SAME_THREAD|NONE, direction,
  evidence_type: self_report|transcript|temporal|semantic,
- supporting_utterance_ids[], reason, alternative_explanations[], confidence}
+ supporting_quote_indices[], reason, alternative_explanations[], confidence}
 ```
 
 **Validation (deterministic, after the model answers):**
