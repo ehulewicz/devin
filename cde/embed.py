@@ -123,23 +123,83 @@ def event_text(ev, topics, people):
     return " | ".join(p for p in parts if p)
 
 
+GOAL_CLUSTER_PROMPT = """Below is a numbered list of goal statements extracted from one week of one person's lifelog. Group them into canonical objectives: merge statements that describe the same underlying goal even when phrased differently (e.g. "buy skewers for the BBQ", "get barbecue supplies", "order charcoal" -> "shop for the barbecue"). Keep genuinely distinct goals separate. Favor a handful of recurring threads (e.g. the final-day party/event planning) over hundreds of one-off micro-goals.
+
+GOALS:
+@@GOALS@@
+
+Reply with ONLY a JSON object: {"<canonical goal name>": [<indices into the list>]} — every index must appear exactly once."""
+
+
 def cluster_goal_strings(items, thresh=0.82):
-    """Greedy cosine clustering of goal mention texts -> canonical GOAL entities.
-    items: [(mention_id, event_id, text)]"""
+    """Goal mention texts -> canonical GOAL entities.
+    LLM canonicalization in batches (semantic merging beats cosine on varied
+    phrasings); falls back to greedy cosine clustering if no LLM is available."""
     texts = [t for _, _, t in items]
-    vecs = embed_texts(texts)
-    clusters = []  # (rep_vec, rep_text, member_idx[])
-    for i, v in enumerate(vecs):
-        best, best_s = None, thresh
-        for c in clusters:
-            s = float(np.dot(v, c[0]))
-            if s >= best_s:
-                best, best_s = c, s
-        if best is None:
-            clusters.append((v, texts[i], [i]))
-        else:
-            best[2].append(i)
-    return [(rep_text, members) for _, rep_text, members in clusters]
+    clusters = []  # (rep_text, member_idx[])
+    ok = True
+    B = 90
+    for off in range(0, len(items), B):
+        chunk = items[off : off + B]
+        listing = "\n".join(f"{i}. {t}" for i, (_, _, t) in enumerate(chunk))
+        try:
+            out = llm.chat_json(GOAL_CLUSTER_PROMPT.replace("@@GOALS@@", listing))
+        except Exception as e:
+            print(f"goal cluster batch {off} LLM failed ({str(e)[:80]}); cosine fallback", flush=True)
+            ok = False
+            break
+        if not isinstance(out, dict):
+            ok = False
+            break
+        assigned = set()
+        for canon, idxs in out.items():
+            members = [off + int(i) for i in idxs
+                       if isinstance(i, (int, float)) and 0 <= int(i) < len(chunk)]
+            members = [m for m in members if m not in assigned]
+            if members:
+                assigned.update(members)
+                clusters.append((canon.strip(), members))
+        for i in range(len(chunk)):  # unassigned -> singleton clusters
+            if off + i not in assigned:
+                clusters.append((chunk[i][2], [off + i]))
+    if ok and len(clusters) > 60:
+        # merge pass: canonical names were produced per-batch; unify across batches
+        names = [c[0] for c in clusters]
+        listing = "\n".join(f"{i}. {n}" for i, n in enumerate(names))
+        try:
+            out = llm.chat_json(GOAL_CLUSTER_PROMPT.replace("@@GOALS@@", listing))
+            if isinstance(out, dict):
+                assigned = set()
+                merged = []
+                for canon, idxs in out.items():
+                    members = []
+                    for i in idxs:
+                        if isinstance(i, (int, float)) and 0 <= int(i) < len(names):
+                            members.extend(clusters[int(i)][1])
+                            assigned.add(int(i))
+                    if members:
+                        merged.append((canon.strip(), sorted(set(members))))
+                for i, c in enumerate(clusters):
+                    if i not in assigned:
+                        merged.append(c)
+                clusters = merged
+        except Exception as e:
+            print(f"goal merge pass failed ({str(e)[:80]}); keeping per-batch clusters", flush=True)
+    if not ok:
+        vecs = embed_texts(texts)
+        clusters = []
+        for i, v in enumerate(vecs):
+            best, best_s = None, thresh
+            for c in clusters:
+                s = float(np.dot(v, c[0]))
+                if s >= best_s:
+                    best, best_s = c, s
+            if best is None:
+                clusters.append((v, texts[i], [i]))
+            else:
+                best[2].append(i)
+        return [(rep, members) for _, rep, members in clusters]
+    return clusters
 
 
 def main():
