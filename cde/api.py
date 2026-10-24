@@ -73,8 +73,7 @@ def graph(subject: str = "A1_JAKE", days: str = "1-7",
          "mood": e["mood"], "recount": e["time_uncertain"]}
         for e in evs
     ]
-    nodes.append({"id": "_pad_top", "type": "_pad", "t": lo * 86400 - 86400, "hour": 24})
-    nodes.append({"id": "_pad_bot", "type": "_pad", "t": hi * 86400, "hour": 0})
+
 
     edges = []
     # event-event edges
@@ -86,7 +85,7 @@ def graph(subject: str = "A1_JAKE", days: str = "1-7",
             continue
         if r["confidence"] is not None and r["confidence"] < min_conf and r["relation"] == "INFLUENCES":
             continue
-        edges.append({"id": f"g{r['id']}", "src": f"e{r['src_id']}", "dst": f"e{r['dst_id']}",
+        edges.append({"id": f"edge-{r['id']}", "src": f"e{r['src_id']}", "dst": f"e{r['dst_id']}",
                       "relation": r["relation"], "status": r["status"],
                       "confidence": r["confidence"], "evidence_type": r["evidence_type"],
                       "rationale": r["rationale"], "score": r["retrieval_score"]})
@@ -114,12 +113,12 @@ def graph(subject: str = "A1_JAKE", days: str = "1-7",
                       "t": days_ev[0]["t_start"] if days_ev else 0,
                       "hour": 25.5, "states": {s["day"]: s["status"] for s in states}})
     for r in c.execute(
-        """SELECT e.* FROM edges e JOIN events s ON s.id=e.src_id JOIN events d ON d.id=e.dst_id
+        """SELECT e.* FROM edges e JOIN events s ON s.id=e.src_id
            WHERE e.src_type='EVENT' AND e.dst_type='GOAL' AND s.subject=? AND s.day BETWEEN ? AND ?""",
         (subject, lo, hi),
     ):
         if r["src_id"] in ev_ids and r["dst_id"] in gids:
-            edges.append({"id": f"g{r['id']}", "src": f"e{r['src_id']}", "dst": f"g{r['dst_id']}",
+            edges.append({"id": f"edge-{r['id']}", "src": f"e{r['src_id']}", "dst": f"g{r['dst_id']}",
                           "relation": "ADVANCES_GOAL", "status": r["status"],
                           "confidence": r["confidence"], "evidence_type": r["evidence_type"],
                           "rationale": r["rationale"], "score": r["retrieval_score"]})
@@ -206,7 +205,8 @@ def chain(event_id: int = Query(...), max_hops: int = 30):
                JOIN events s ON s.id=e.src_id
                WHERE e.dst_type='EVENT' AND e.dst_id=? AND e.src_type='EVENT'
                AND e.relation IN ('INFLUENCES','REFERS_TO','SAME_THREAD')
-               AND e.status!='rejected' ORDER BY s.t_start LIMIT 1""",
+               AND e.status!='rejected'
+               ORDER BY e.confidence DESC, s.t_start LIMIT 1""",
             (cur_id,),
         ).fetchone()
         if not r or r["src_id"] in seen:

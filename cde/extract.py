@@ -110,6 +110,8 @@ def person_entity(cur, name):
 
 def store(con, subject, day, file, rows, data):
     """Insert one hour's extraction. Utterance ids validated against the window."""
+    if not rows:
+        return 0
     valid = {r["id"] for r in rows}
     by_id = {r["id"]: r for r in rows}
     cur = con.cursor()
@@ -121,6 +123,23 @@ def store(con, subject, day, file, rows, data):
     old = [r["id"] for r in cur.fetchall()]
     if old:
         q = ",".join("?" * len(old))
+        # These derived rows reference events directly and may already exist when
+        # a cached hour is replayed after embedding/linking. Remove them before
+        # replacing the source events so a resume remains idempotent with foreign
+        # keys enabled. The derived stages are rebuilt after extraction finishes.
+        cur.execute(f"DELETE FROM goal_state WHERE event_id IN ({q})", old)
+        cur.execute(f"DELETE FROM pattern_occurrences WHERE event_id IN ({q})", old)
+        cur.execute(
+            f"DELETE FROM edge_evidence WHERE edge_id IN ("
+            f"SELECT id FROM edges WHERE (src_type='EVENT' AND src_id IN ({q})) "
+            f"OR (dst_type='EVENT' AND dst_id IN ({q})))",
+            old + old,
+        )
+        cur.execute(
+            f"DELETE FROM edges WHERE (src_type='EVENT' AND src_id IN ({q})) "
+            f"OR (dst_type='EVENT' AND dst_id IN ({q}))",
+            old + old,
+        )
         for t in ("event_utterances", "event_participants", "event_entities"):
             cur.execute(f"DELETE FROM {t} WHERE event_id IN ({q})", old)
         cur.execute(

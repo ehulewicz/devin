@@ -16,6 +16,7 @@ Usage: python -m cde.link [--subject A1_JAKE] [--skip-judge] [--max-pairs 400]
 """
 import json
 import math
+import os
 import sys
 from collections import defaultdict
 
@@ -206,16 +207,20 @@ def candidates(con, subject):
             s = 0.4 * float(cos[k]) + 0.2 * jac + 0.2 * decay + 0.2 * context
             scores.append((s, j, claim_sim))
         scores.sort(reverse=True)
-        picked, n_cross = [], 0
-        for s, j, cs in scores:
-            if len(picked) >= TOP_K:
-                break
-            if evs[j]["hour"] != e["hour"] or n_cross > 0:
-                picked.append((s, j))
+        picked = [(s, j) for s, j, _ in scores[:TOP_K]]
+        # guarantee at least one cross-hour and one cross-day candidate
+        if not any(evs[j]["hour"] != e["hour"] for _, j in picked):
+            for s, j, _ in scores[TOP_K:]:
                 if evs[j]["hour"] != e["hour"]:
-                    n_cross += 1
+                    picked.append((s, j))
+                    break
+        if not any(evs[j]["day"] != e["day"] for _, j in picked):
+            for s, j, _ in scores:
+                if evs[j]["day"] != e["day"] and (s, j) not in picked:
+                    picked.append((s, j))
+                    break
         for s, j, cs in scores:  # causal-claim candidates always included
-            if cs >= 0.45 and (s, j) not in [(a, b) for a, b in picked]:
+            if cs >= 0.45 and all(j != pj for _, pj in picked):
                 picked.append((s, j))
         for s, j in picked:
             pairs[(evs[j]["id"], e["id"])] = round(s, 4)
@@ -254,13 +259,69 @@ Reply with ONLY a JSON list."""
 
 def judge(con, evs, pairs, max_pairs=400):
     by_id = {e["id"]: e for e in evs}
-    items = sorted(pairs.items(), key=lambda kv: -kv[1])[:max_pairs]
+    ranked = sorted(pairs.items(), key=lambda kv: -kv[1])
+    cross_day = [kv for kv in ranked if by_id[kv[0][0]]["day"] < by_id[kv[0][1]]["day"]]
+    half = max_pairs // 2
+    items = ranked[:half]
+    seen = {kv[0] for kv in items}
+    for kv in cross_day:
+        if len(items) >= max_pairs:
+            break
+        if kv[0] not in seen:
+            items.append(kv)
+            seen.add(kv[0])
     cur = con.cursor()
     done_pairs = set()
     stats = defaultdict(int)
 
-    def fmt(e):
-        utts = event_utterances(con, e["id"])
+    # verdict cache: survives reruns so judged pairs are free
+    cache_path = os.path.join(db.ROOT, "data", "judged.json")
+    try:
+        cache = json.load(open(cache_path))
+    except Exception:
+        cache = {}
+
+    def apply_verdict(a, b, s, r):
+        A, B = by_id[a], by_id[b]
+        rel = str(r.get("relation", "NONE")).upper()
+        etype = r.get("evidence_type")
+        ev_ids = r.get("supporting_utterance_ids") or []
+        if A["t_start"] >= B["t_start"]:
+            rel = "NONE"
+            r["reason"] = "rejected: source not earlier than target"
+        valid = {u["id"] for u in event_utterances(con, a, 100)} | \
+                {u["id"] for u in event_utterances(con, b, 100)}
+        ev_ids = [u for u in ev_ids if u in valid]
+        if rel == "INFLUENCES" and (etype not in ("self_report", "transcript") or not ev_ids):
+            rel, stats["downgraded"] = "SAME_THREAD", stats["downgraded"] + 1
+            r["reason"] = (r.get("reason") or "") + " [downgraded: no cited evidence]"
+        if rel == "NONE":
+            add_edge(cur, "EVENT", a, "EVENT", b, rel, status="rejected",
+                     etype=etype, rationale=r.get("reason"),
+                     alts=r.get("alternative_explanations"), score=s)
+            stats["rejected"] += 1
+        elif rel in ("INFLUENCES", "REFERS_TO", "SAME_THREAD"):
+            add_edge(cur, "EVENT", a, "EVENT", b, rel,
+                     conf=r.get("confidence"),
+                     status="hypothesis" if rel == "INFLUENCES" else "observed",
+                     etype=etype, rationale=r.get("reason"),
+                     alts=r.get("alternative_explanations"), score=s,
+                     evidence=ev_ids)
+            stats[rel.lower()] += 1
+
+    # apply cached verdicts without LLM calls
+    for (a, b), s in items:
+        key = f"{a}_{b}"
+        if key in cache:
+            done_pairs.add((a, b))
+            apply_verdict(a, b, s, cache[key])
+    con.commit()
+    if done_pairs:
+        print(f"replayed {len(done_pairs)} cached verdicts", flush=True)
+    items = [kv for kv in items if kv[0] not in done_pairs]
+
+    def fmt(c2, e):
+        utts = event_utterances(c2, e["id"])
         q = "\n".join(f'    u{u["id"]} {u["hms"]} {u["speaker"]}: {(u["text_en"] or "")[:120]}'
                       for u in utts)
         return (f'event_id={e["id"]} day{e["day"]} t={e["t_start"]:.0f} '
@@ -269,10 +330,15 @@ def judge(con, evs, pairs, max_pairs=400):
     batches = [items[s : s + 10] for s in range(0, len(items), 10)]
 
     def call(batch):
-        ptxt = []
-        for n, ((a, b), s) in enumerate(batch):
-            ptxt.append(f"--- pair {n} (retrieval_score={s}) ---\nA: {fmt(by_id[a])}\nB: {fmt(by_id[b])}")
-        return llm.chat_json(JUDGE_PROMPT.replace("@@PAIRS@@", "\n".join(ptxt)))
+        c2 = db.connect()  # sqlite connections are per-thread
+        try:
+            ptxt = []
+            for n, ((a, b), s) in enumerate(batch):
+                ptxt.append(f"--- pair {n} (retrieval_score={s}) ---\n"
+                            f"A: {fmt(c2, by_id[a])}\nB: {fmt(c2, by_id[b])}")
+            return llm.chat_json(JUDGE_PROMPT.replace("@@PAIRS@@", "\n".join(ptxt)))
+        finally:
+            c2.close()
 
     from concurrent.futures import ThreadPoolExecutor
     results = {}
@@ -302,40 +368,15 @@ def judge(con, evs, pairs, max_pairs=400):
                 continue
             returned.add(n)
             (a, b), s = batch[n]
-            A, B = by_id[a], by_id[b]
-            rel = str(r.get("relation", "NONE")).upper()
-            etype = r.get("evidence_type")
-            ev_ids = r.get("supporting_utterance_ids") or []
-            # validation: source precedes target
-            if A["t_start"] >= B["t_start"]:
-                rel = "NONE"
-                r["reason"] = "rejected: source not earlier than target"
-            # validation: cited ids must exist among the pair's utterances
-            valid = {u["id"] for u in event_utterances(con, a, 100)} | \
-                    {u["id"] for u in event_utterances(con, b, 100)}
-            ev_ids = [u for u in ev_ids if u in valid]
-            if rel == "INFLUENCES" and (etype not in ("self_report", "transcript") or not ev_ids):
-                rel, stats["downgraded"] = "SAME_THREAD", stats["downgraded"] + 1
-                r["reason"] = (r.get("reason") or "") + " [downgraded: no cited evidence]"
-            if rel == "NONE":
-                add_edge(cur, "EVENT", a, "EVENT", b, rel, status="rejected",
-                         etype=etype, rationale=r.get("reason"),
-                         alts=r.get("alternative_explanations"), score=s)
-                stats["rejected"] += 1
-            elif rel in ("INFLUENCES", "REFERS_TO", "SAME_THREAD"):
-                add_edge(cur, "EVENT", a, "EVENT", b, rel,
-                         conf=r.get("confidence"),
-                         status="hypothesis" if rel == "INFLUENCES" else "observed",
-                         etype=etype, rationale=r.get("reason"),
-                         alts=r.get("alternative_explanations"), score=s,
-                         evidence=ev_ids)
-                stats[rel.lower()] += 1
+            cache[f"{a}_{b}"] = r
+            apply_verdict(a, b, s, r)
         for n, ((a, b), s) in enumerate(batch):  # no verdict returned -> rejected
             if n not in returned:
                 add_edge(cur, "EVENT", a, "EVENT", b, "NONE", status="rejected",
                          rationale="judge returned no verdict", score=s)
                 stats["rejected"] += 1
         con.commit()
+        json.dump(cache, open(cache_path, "w"), ensure_ascii=False)
         print(f"judged batch {bi}: cumulative stats {dict(stats)}", flush=True)
 
     # pairs in failed batches -> rejected
