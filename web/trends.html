@@ -76,7 +76,8 @@
     <button class="mbtn" data-m="exposure">exposure</button>
   </span>
   <button class="mbtn" id="fit">⤢ fit</button>
-  <span class="hint">scroll to zoom · click a person or an edge for detail · click empty space to reset</span>
+  <span id="uchips"></span>
+  <span class="hint">pick a person — they're the hub; orbit nodes = their connections (closer = stronger). Click an orbit node or link to zoom into the pair.</span>
   <a class="mlink" href="/">event graph →</a>
 </header>
 <main>
@@ -89,7 +90,9 @@ const $ = s => document.querySelector(s);
 const WEARERS = Object.keys(D.users);                    // ["A1_JAKE", ...]
 const CODE = {}, NAME = {}, COLOR = {};
 const PALETTE = ["#f0883e","#58a6ff","#3fb950","#bc8cff","#e3b341","#79c0ff"];
-WEARERS.forEach((w,i) => { CODE[w] = w.split("_")[0]; NAME[w] = w.split("_")[1]; COLOR[w] = PALETTE[i]; });
+WEARERS.forEach((w,i) => { CODE[w] = w.split("_")[0];
+  NAME[w] = w[3] + w.slice(4).toLowerCase();   // A1_JAKE -> "Jake" (data uses title case)
+  COLOR[w] = PALETTE[i]; });
 const CODE2W = Object.fromEntries(WEARERS.map(w => [CODE[w], w]));
 
 // ---------- pair metrics ----------
@@ -132,7 +135,7 @@ const METRICS = {
   exposure:   { get: p => p.exposure,label: "heard each other",  fmt: v => v },
 };
 let metric = "copresence";
-const maxFor = m => Math.max(...PAIRS.map(METRICS[m].get));
+const maxFor = m => Math.max(...PAIRS.map(METRICS[m].get), 1);   // floor 1: no 0/0 norms
 
 // ---------- narratives (from analysis/TRENDS.md) ----------
 const NOTES = {
@@ -172,49 +175,85 @@ const ASSUMED = {
 };
 
 // ---------- graph ----------
-let cy;
+let cy, curUser = null;              // null = group mesh; wearer code = ego star
+const maxOwn = Math.max(...WEARERS.map(w => D.users[w].own_utterances));
+
+const CY_STYLE = [
+  { selector: "node", style: {
+      "background-color": n => COLOR[n.data("wearer")],
+      "width": n => n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn),
+      "height": n => n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn),
+      "label": n => n.data("name") + "\n" + n.data("own") + " utts",
+      "color": "#e6edf3", "font-size": 11, "text-valign": "bottom",
+      "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": "90px",
+      "border-width": 0 }},
+  { selector: "node[?hub]", style: {
+      "font-size": 15, "font-weight": 700, "border-width": 4,
+      "border-color": "#ffd33d" }},
+  { selector: "edge", style: {
+      "width": e => 1 + 11 * e.data("norm"),
+      "line-color": "#3d444d", "opacity": 0.75,
+      "curve-style": "bezier",
+      "label": e => METRICS[metric].fmt(e.data("v")),
+      "font-size": 10, "color": "#e6edf3", "text-opacity": 0,
+      "text-background-color": "#0d1117", "text-background-opacity": 0.85,
+      "text-background-padding": 2 }},
+  { selector: "edge[?ego]", style: { "text-opacity": 1, "font-size": 12 }},
+  { selector: ".faded", style: { "opacity": 0.12 }},
+  { selector: "edge.hi", style: { "line-color": "#f0883e", "opacity": 1 }},
+  { selector: "node.hi", style: { "border-width": 3, "border-color": "#ffd33d" }},
+];
+
 function buildGraph() {
   const mx = maxFor(metric);
   const els = [];
-  for (const w of WEARERS) {
-    const u = D.users[w];
-    els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
-                       own: u.own_utterances, captured: u.utterances_captured }});
-  }
-  for (const p of PAIRS) {
-    const v = METRICS[metric].get(p);
-    els.push({ data: { id: "p" + p.key, source: CODE[p.w1], target: CODE[p.w2],
-                       pair: p.key, v, norm: v / mx }});
+  if (!curUser) {
+    // group mesh: everyone equal, force layout clusters strong pairs together
+    for (const w of WEARERS) {
+      const u = D.users[w];
+      els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
+                         own: u.own_utterances, captured: u.utterances_captured }});
+    }
+    for (const p of PAIRS) {
+      const v = METRICS[metric].get(p);
+      els.push({ data: { id: "p" + p.key, source: CODE[p.w1], target: CODE[p.w2],
+                         pair: p.key, v, norm: v / mx }});
+    }
+  } else {
+    // ego star: hub big at origin; satellites ring it, distance inverts strength
+    const hub = D.users[curUser];
+    els.push({ data: { id: CODE[curUser], name: NAME[curUser], wearer: curUser,
+                       own: hub.own_utterances, captured: hub.utterances_captured,
+                       hub: 1 },
+               position: { x: 0, y: 0 }});
+    const others = WEARERS.filter(w => w !== curUser);
+    others.forEach((w, i) => {
+      const p = pairMetrics(curUser, w);
+      const v = METRICS[metric].get(p), norm = v / mx;
+      const ang = (i / others.length) * 2 * Math.PI - Math.PI / 2;
+      const rad = 460 - 300 * norm;                    // stronger -> closer to hub
+      const u = D.users[w];
+      els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
+                         own: u.own_utterances, captured: u.utterances_captured,
+                         norm },
+                 position: { x: rad * Math.cos(ang), y: rad * Math.sin(ang) }});
+      els.push({ data: { id: "p" + p.key, source: CODE[curUser], target: CODE[w],
+                         pair: p.key, v, norm, ego: 1 }});
+    });
   }
   if (cy) cy.destroy();
   cy = cytoscape({
     container: $("#cy"), elements: els, wheelSensitivity: 0.25,
     minZoom: 0.3, maxZoom: 5,
-    layout: { name: "cose", animate: false, nodeRepulsion: 9000,
-              idealEdgeLength: e => 220 - 140 * e.data("norm"), edgeElasticity: 50 },
-    style: [
-      { selector: "node", style: {
-          "background-color": n => COLOR[n.data("wearer")],
-          "width": n => 26 + 42 * (n.data("own") / 3100),
-          "height": n => 26 + 42 * (n.data("own") / 3100),
-          "label": n => n.data("name") + "\\n" + n.data("own") + " utts",
-          "color": "#e6edf3", "font-size": 11, "text-valign": "bottom",
-          "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": "90px",
-          "border-width": 0 }},
-      { selector: "edge", style: {
-          "width": e => 1 + 11 * e.data("norm"),
-          "line-color": "#3d444d", "opacity": 0.75,
-          "curve-style": "bezier",
-          "label": e => METRICS[metric].fmt(e.data("v")),
-          "font-size": 10, "color": "#e6edf3", "text-opacity": 0,
-          "text-background-color": "#0d1117", "text-background-opacity": 0.85,
-          "text-background-padding": 2 }},
-      { selector: ".faded", style: { "opacity": 0.12 }},
-      { selector: "edge.hi", style: { "line-color": "#f0883e", "opacity": 1 }},
-      { selector: "node.hi", style: { "border-width": 3, "border-color": "#ffd33d" }},
-    ],
+    layout: curUser ? { name: "preset" }
+                    : { name: "cose", animate: false, nodeRepulsion: 9000,
+                        idealEdgeLength: e => 220 - 140 * e.data("norm"),
+                        edgeElasticity: 50 },
+    style: CY_STYLE,
   });
+  cy.fit(undefined, curUser ? 110 : 60);
   cy.on("zoom", () => {
+    if (curUser) return;                               // ego labels always on
     const t = cy.zoom() > 0.75 ? 1 : 0;
     cy.edges().forEach(e => { if (e.style("text-opacity") != t) e.style("text-opacity", t); });
   });
@@ -223,18 +262,36 @@ function buildGraph() {
   cy.on("tap", ev => { if (ev.target === cy) resetView(); });
 }
 
+function setUser(w) {
+  curUser = w;
+  document.querySelectorAll(".uchip").forEach(b =>
+    b.classList.toggle("on", b.dataset.u === (w || "")));
+  buildGraph();
+  if (w) showUser(w); else showOverview();
+}
+
+// user chips in header
+(() => {
+  const box = $("#uchips");
+  const all = document.createElement("button");
+  all.textContent = "group"; all.className = "mbtn uchip"; all.dataset.u = "";
+  all.onclick = () => setUser(null);
+  box.appendChild(all);
+  for (const w of WEARERS) {
+    const b = document.createElement("button");
+    b.textContent = NAME[w]; b.className = "mbtn uchip"; b.dataset.u = w;
+    b.style.borderColor = COLOR[w];
+    b.onclick = () => setUser(w);
+    box.appendChild(b);
+  }
+})();
+
 function setMetric(m) {
   metric = m;
   document.querySelectorAll(".mbtn[data-m]").forEach(b =>
     b.classList.toggle("on", b.dataset.m === m));
-  const mx = maxFor(m);
-  cy.edges().forEach(e => {
-    const p = PAIRS.find(x => "p" + x.key === e.id());
-    const v = METRICS[m].get(p);
-    e.data("v", v); e.data("norm", v / mx);
-  });
-  cy.layout({ name: "cose", animate: true, animationDuration: 400, nodeRepulsion: 9000,
-              idealEdgeLength: e => 220 - 140 * e.data("norm"), edgeElasticity: 50 }).run();
+  buildGraph();                       // ego positions depend on the metric — rebuild
+  if (curUser) showUser(curUser); else showOverview();
 }
 document.querySelectorAll(".mbtn[data-m]").forEach(b => b.onclick = () => setMetric(b.dataset.m));
 $("#fit").onclick = () => { cy.animate({ fit: { padding: 60 } }, { duration: 300 }); };
@@ -246,10 +303,15 @@ function hilite(eles) {
 }
 function resetView() {
   cy.elements().removeClass("faded hi");
-  cy.animate({ fit: { padding: 60 } }, { duration: 300 });
-  showOverview();
+  cy.animate({ fit: { padding: curUser ? 110 : 60 } }, { duration: 300 });
+  if (curUser) showUser(curUser); else showOverview();
 }
 function focusNode(n) {
+  if (curUser && !n.data("hub")) {
+    // ego mode: tapping an orbit node zooms into that pair link
+    const e = cy.edges().filter(x => x.connectedNodes().contains(n))[0];
+    if (e.nonempty()) { focusEdge(e); return; }
+  }
   const hood = n.closedNeighborhood();
   hilite(hood);
   cy.animate({ fit: { eles: hood, padding: 90 } }, { duration: 400 });
@@ -375,7 +437,7 @@ function showUser(w) {
     <h3>trend notes</h3>
     <ul class="tight">${NOTES[w].map(n => `<li>${n}</li>`).join("")}</ul>
     <div class="note assumed"><span class="tag">ASSUMED · WEEK</span><br>${ASSUMED[w]}</div>
-    <button class="backbtn" onclick="resetView()">← back to group</button>`;
+    <button class="backbtn" onclick="setUser(null)">← group view</button>`;
   bindPairRows();
 }
 
@@ -403,7 +465,7 @@ function showPair(p) {
       <div class="stat"><b>${p.shared.toLocaleString()}</b>shared utterances</div>
       <div class="stat"><b>${p.span}h</b>overlap ${p.first}–${p.last}</div>
     </div>
-    <h3>replies — who responds to whom</h3>
+    <h3>exchanges — speaker → responder</h3>
     <div class="hbar"><span class="nm">${NAME[p.w1]} → ${NAME[p.w2]}</span>
       <span class="tr"><span class="fl" style="width:${Math.round(100*p.r12/rTot)}%"></span></span>
       <span class="vl">${p.r12}</span></div>
@@ -436,7 +498,9 @@ function showPair(p) {
     ${spanNote}
     <div class="note">Reply counts are amplified ~3–4× because every nearby recorder captures the same
       exchange — read the <i>ratio</i> between directions, not the absolute numbers.</div>
-    <button class="backbtn" onclick="resetView()">← back to group</button>`;
+    <button class="backbtn" onclick="resetView()">← back to ${curUser ? NAME[curUser] : "group"}</button>
+    <button class="backbtn" style="border-color:${COLOR[p.w1]}" onclick="setUser('${p.w1}')">◉ center on ${NAME[p.w1]}</button>
+    <button class="backbtn" style="border-color:${COLOR[p.w2]}" onclick="setUser('${p.w2}')">◉ center on ${NAME[p.w2]}</button>`;
 }
 
 buildGraph();

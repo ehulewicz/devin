@@ -167,12 +167,20 @@ def clip_for_utterance(con, uid):
     if os.path.exists(out) and os.path.getsize(out) > 0:
         return out
     os.makedirs(AUDIO_DIR, exist_ok=True)
-    r = subprocess.run(
-        [exe, "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", media,
-         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-f", "adts", out],
-        capture_output=True, timeout=60)
-    if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 400:
+    tmp = out + ".tmp"                    # atomic: failed/concurrent writes never served
+    try:
+        r = subprocess.run(
+            [exe, "-y", "-ss", f"{start:.2f}", "-t", f"{dur:.2f}", "-i", media,
+             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-f", "adts", tmp],
+            capture_output=True, timeout=60)
+        ok = r.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) >= 400
+    except subprocess.TimeoutExpired:
+        ok = False
+    if not ok:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
         return None
+    os.replace(tmp, out)
     return out
 
 
@@ -201,6 +209,8 @@ def silence_spans(media, noise_db=-35, min_sil=0.35):
         if m and cur is not None:
             spans.append((cur, float(m.group(1))))
             cur = None
+    if cur is not None:                   # silence running to EOF
+        spans.append((cur, float("inf")))
     return spans
 
 
