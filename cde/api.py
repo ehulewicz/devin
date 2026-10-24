@@ -7,7 +7,7 @@ import math
 import os
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from cde import db
@@ -336,7 +336,7 @@ def audio_clip(uid: int):
     path = audio.clip_for_utterance(c, uid)
     c.close()
     if not path:
-        return {"error": "no media for this utterance"}, 404
+        return JSONResponse({"error": "no media for this utterance"}, status_code=404)
     return FileResponse(path, media_type="audio/aac")
 
 

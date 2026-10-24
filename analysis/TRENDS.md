@@ -127,6 +127,26 @@ judging mostly radiate from his plans.
 - **[assumed week]** Expect recurring evening splits + GF/sister events as a
   parallel thread in his part of the graph.
 
+## Timing signals (added — `compute_trends.py`, rendered in `web/trends.html`)
+
+| Signal | Definition |
+|---|---|
+| reply latency | median gap from A's utterance end to B's start (floored at 1s by SRT resolution — `--audio` VAD refines) |
+| talk-over rate | B starts before A ends, as % of that member's exchanges |
+| airtime | voiced seconds per wearer (transcript durations; VAD-refined with `--audio` + EgoLife media) |
+| monologue | longest consecutive same-speaker streak |
+
+Findings:
+- **Alice⇄Tasha are the most patient dyad** — 25–27% talk-over vs the ~40%
+  group norm; they let each other finish. Strengthens the "stable sub-pair"
+  reading beyond co-presence alone.
+- **Jake's dyads are the hottest** — 36–50% talk-over in every pairing;
+  animated exchanges, consistent with the hub role.
+- **Airtime**: Jake 78min > Lucia 68 > Shure 65 > Tasha 55 > Katrina 52 >
+  Alice 43 — Alice is the quiet center by time, not just utterance count.
+- **Longest monologues**: Shure 42-utterance streak — when he talks, he holds
+  the floor (his isolated-evening recording likely contributes).
+
 ## Group-level trends
 
 - **Shared rhythm**: group together 11:10→~22:00 with a universal capture gap
