@@ -340,6 +340,7 @@ def _theme_card(c, t, evs, jedges):
     ts = sorted(e["t_start"] for e in evs)
     n = len(ts)
     card = {"id": t["id"], "name": t["name"], "description": t["description"],
+            "kind": t.get("kind"),
             "n_events": n, "days": sorted({e["day"] for e in evs}),
             "t_first": ts[0] if n else None, "t_last": ts[-1] if n else None,
             "t_median": ((ts[n // 2] if n % 2 else (ts[n // 2 - 1] + ts[n // 2]) / 2)
@@ -444,6 +445,34 @@ def zoom_theme(tid: int, subject: str = "A1_JAKE"):
         nodes.append({"id": f"t{ot}", "type": "THEME",
                       "label": themes[ot]["name"] if ot in themes else str(ot),
                       "n_events": counts.get(ot, 0)})
+    conn = {}
+    for (eid, ot, out), k in cross.items():
+        cc = conn.setdefault(ot, {"n_out": 0, "n_in": 0})
+        cc["n_out" if out else "n_in"] += k
+    connected_list = sorted(
+        ({"id": ot,
+          "name": themes[ot]["name"] if ot in themes else str(ot),
+          "kind": themes[ot].get("kind") if ot in themes else None,
+          "n_out": v["n_out"], "n_in": v["n_in"]}
+         for ot, v in conn.items()),
+        key=lambda x: -(x["n_out"] + x["n_in"]))
+    # insights that mention any of this theme's top non-Jake people
+    related = []
+    try:
+        names = [p[0] for p in card["top_people"] if p[0] != "Jake"]
+        if names:
+            for r in c.execute(
+                """SELECT id, title, lens, body FROM insights
+                   WHERE lens IN ('around_you','you_around','portrait')
+                   ORDER BY rank"""):
+                txt = f"{r['title'] or ''} {r['body'] or ''}".lower()
+                if any(nm.lower() in txt for nm in names):
+                    related.append({"id": r["id"], "title": r["title"],
+                                    "lens": r["lens"]})
+                    if len(related) >= 6:
+                        break
+    except sqlite3.OperationalError:
+        pass
     # spine: longest intra-theme path over judged edges, DP in t_start order
     pos = {e["id"]: i for i, e in enumerate(evs)}
     preds = {}
@@ -468,7 +497,8 @@ def zoom_theme(tid: int, subject: str = "A1_JAKE"):
             i = par[i]
         spine.reverse()
     c.close()
-    return {"theme": card, "nodes": nodes, "edges": edges, "spine": spine}
+    return {"theme": card, "nodes": nodes, "edges": edges, "spine": spine,
+            "connected": connected_list, "related_insights": related}
 
 
 # ---------- insights ----------

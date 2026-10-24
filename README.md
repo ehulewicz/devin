@@ -318,12 +318,34 @@ Each card stores evidence ids (utterances / events / edges / goals), which
 - Jake around them: laughs 0.71× with Alice and 0.55× with Tasha; says yes/okay 1.57× with Alice.
 - 210 presence effects computed → 31 notable → 22 insight cards.
 
-**Themes (zoom level 1)**
-- Event preparation 215 · Cooking & baking 122 · Social interactions 106 ·
-  Documenting memories 74 · Final-day party 36 · Games & icebreakers 33 ·
-  Dance rehearsal 27 · Room decoration 25 · Money & reimbursements 14 ·
-  Auction & gifts 3.
-- All 270 goals classified explicitly; 428 events placed by goal vote, 227 by embedding.
+**Themes (zoom level 1): 16 themes, 99 cross-theme links**
+
+| What you did (activity) | Events |
+|---|---|
+| Event preparation | 215 |
+| Cooking & baking | 122 |
+| Documenting memories | 74 |
+| Final-day party | 36 |
+| Games & icebreakers | 33 |
+| Dance rehearsal | 27 |
+| Room decoration | 25 |
+| Money & reimbursements | 14 |
+| Auction & gifts | 3 |
+
+| How it went with people (social) | Events |
+|---|---|
+| Playful banter with Shure | 38 |
+| Storytelling and sharing experiences | 21 |
+| Collaborative planning | 16 |
+| Light-hearted troubleshooting | 12 |
+| Curiosity and exploration | 8 |
+| Creative projects with Lucia | 7 |
+| Encouragement and support | 4 |
+
+- The social themes are the 106 events of the old "Social interactions"
+  bucket, re-themed from event summaries.
+- Event placement: 373 events by goal vote, 106 by the social split, 176 by
+  embedding.
 
 ---
 

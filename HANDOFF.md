@@ -12,7 +12,7 @@ pipeline doesn't use and the agreed priority for adding them.
 | embed | done — OpenAI `text-embedding-3-small` (1,536-dim); goals LLM-canonicalized to 270 specific threads ("plan and host the final-day party" 6d/42ev) |
 | link | done — deterministic + 800 pairs judged by `gpt-4o-mini` with positional quote citation; INTERACTION_PATTERN (person→person z-test) built; verdicts cached in `data/judged.json` |
 | patterns | superseded by themes (12 legacy clusters kept) |
-| themes | done — `python3 -m cde.themes`: 10 named themes (two-step LLM name + classify), every event assigned; cache `data/themes.json` |
+| themes | done — `python3 -m cde.themes`: 16 themes = 9 activity (two-step LLM name + classify over goals) + 7 social (old "Social interactions" bucket re-themed by kind of interaction from event summaries); caches `data/themes.json`, `data/social_themes.json` |
 | insights | done — `python3 -m cde.insights`: heard_by presence effects over all 6 recorders, group-size stratified (CMH z), 31 notable → 22 cards |
 
 Edge counts: SPOKE 53,313 · EXPRESSES 2,808 · PARTICIPATED_IN 2,810 ·

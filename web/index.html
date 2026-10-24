@@ -243,9 +243,17 @@ const style = [
     'target-arrow-fill': '#bc8cff', 'opacity': 0.6, 'line-style': 'dashed'}},
   {selector: 'edge[status="rejected"]', style: {'line-color': '#f85149', 'width': 1,
     'line-style': 'dashed', 'opacity': 0.35, 'display': 'none'}},
+  {selector: 'node[type="BANDLABEL"]', style: {
+    'background-opacity': 0, 'border-width': 0, 'label': 'data(label)',
+    'color': '#8b949e', 'font-size': 11, 'font-weight': 700,
+    'text-halign': 'left', 'text-valign': 'center', 'events': 'no',
+    'width': 160, 'height': 24}},
   {selector: 'node[type="THEME"]', style: {
-    'shape': 'ellipse', 'background-color': '#58a6ff', 'background-opacity': 0.18,
-    'border-width': 2, 'border-color': '#58a6ff',
+    'shape': 'ellipse',
+    'background-color': n => n.data('kind') === 'social' ? '#39c5cf' : '#58a6ff',
+    'background-opacity': 0.18,
+    'border-width': 2,
+    'border-color': n => n.data('kind') === 'social' ? '#39c5cf' : '#58a6ff',
     'width': n => 30 + 9 * Math.sqrt(n.data('n_events') || 1),
     'height': n => 30 + 9 * Math.sqrt(n.data('n_events') || 1),
     'label': 'data(label)', 'font-size': 12, 'font-weight': 600, 'color': '#e6edf3',
@@ -484,13 +492,24 @@ async function loadThemes() {
   await fetchThemes();
   $("#crumb").style.display = "none";
   const els = [];
-  (lastThemes || []).forEach((t, i) => {
+  const byMed = (a, b) => (a.t_median || 0) - (b.t_median || 0);
+  const acts = (lastThemes || []).filter(t => t.kind !== "social").sort(byMed);
+  const socs = (lastThemes || []).filter(t => t.kind === "social").sort(byMed);
+  const mk = (t, i, y0) => {
     const a = t.days.length ? t.days[0] : "?", b = t.days.length ? t.days[t.days.length - 1] : "?";
-    els.push({data: {id: "t" + t.id, type: "THEME",
-                     label: `${t.name}\n${t.n_events} events · D${a}–D${b}`,
+    const wp = (t.top_people || []).map(p => p[0]).filter(n => n !== "Jake").slice(0, 2);
+    els.push({data: {id: "t" + t.id, type: "THEME", kind: t.kind,
+                     label: `${t.name}\n${t.n_events} events · D${a}–D${b}` +
+                       (t.kind === "social" && wp.length ? `\nwith ${wp.join(", ")}` : ""),
                      n_events: t.n_events},
-              position: {x: (t.t_median || 0) * 0.010, y: (i % 3) * 170}});
-  });
+              position: {x: i * 210, y: y0 + (i % 2) * 120}});
+  };
+  acts.forEach((t, i) => mk(t, i, 0));
+  socs.forEach((t, i) => mk(t, i, 330));
+  els.push({data: {id: "band-act", type: "BANDLABEL", label: "WHAT YOU DID"},
+            position: {x: -170, y: 60}, selectable: false, grabbable: false});
+  els.push({data: {id: "band-soc", type: "BANDLABEL", label: "HOW IT WENT WITH PEOPLE"},
+            position: {x: -170, y: 390}, selectable: false, grabbable: false});
   for (const l of lastLinks || [])
     els.push({data: {id: `tl${l.src}-${l.dst}`, source: "t" + l.src, target: "t" + l.dst,
                      relation: "THEME_LINK", n: l.n, infl: (l.by_relation || {}).INFLUENCES || 0}});
@@ -525,44 +544,54 @@ async function loadTheme() {
   const intra = d.edges.filter(e => e.relation !== "CROSS_THEME"
     && evIds.has(e.src) && evIds.has(e.dst));
   const els = buildElements({nodes: evNodes, edges: intra});
-  const stubs = d.nodes.filter(n => n.type === "THEME");
-  const maxX = Math.max(0, ...els.filter(e => e.position).map(e => e.position.x)) + 200;
-  stubs.forEach((s, i) => els.push({
-    data: {id: s.id, type: "THEME", label: `${s.label}\n${s.n_events} events`,
-           n_events: s.n_events},
-    position: {x: maxX, y: i * 110}, classes: "stub"}));
-  const present = new Set(els.map(e => e.data.id));
-  for (const e of d.edges)
-    if (e.relation === "CROSS_THEME" && present.has(e.src) && present.has(e.dst))
-      els.push({data: {id: e.id, source: e.src, target: e.dst,
-                       relation: "CROSS_THEME", n: e.n}});
+  // greedy lane packing: each event in the lowest lane whose last x is <= x - 40
+  const laneX = [];
+  for (const el of els.filter(e => e.position)
+                     .sort((a, b) => a.position.x - b.position.x)) {
+    let lane = laneX.findIndex(lx => lx <= el.position.x - 40);
+    if (lane < 0) { lane = laneX.length; laneX.push(-Infinity); }
+    laneX[lane] = el.position.x;
+    el.position.y = lane * 40;
+  }
   if (cy) cy.destroy();
   cy = cytoscape({container: $("#cy"), elements: els, style,
     wheelSensitivity: 0.3, minZoom: 0.05, maxZoom: 4});
   cy.fit(undefined, 40);
-  const sp = d.spine || [];
+  const sp = (d.spine || []).filter(id => evIds.has("e" + id));
   sp.forEach(id => cy.getElementById("e" + id).addClass("chain"));
   for (let i = 0; i + 1 < sp.length; i++)
     cy.edges(`[source="e${sp[i]}"][target="e${sp[i + 1]}"]`).addClass("chain");
   cy.on('tap', 'node[type="EVENT"]', ev => inspect(ev.target.data('id').slice(1)));
-  cy.on('tap', 'node[type="THEME"]', ev =>
-    { curTheme = +ev.target.data('id').slice(1); loadTheme(); });
+  showThemeCard(curTheme, d);
 }
 
-async function showThemeCard(tid) {
+async function showThemeCard(tid, zoom) {
   if (!lastThemes) await fetchThemes();
   const t = (lastThemes || []).find(x => x.id === tid);
   if (!t) return;
+  if (!zoom) zoom = await api(`/api/zoom/theme/${tid}`);
+  const conn = (zoom && zoom.connected) || [];
+  const rel = (zoom && zoom.related_insights) || [];
   const insp = $("#inspector");
   insp.innerHTML = `<h2>${t.name}</h2>
-    <div class="meta">${t.n_events} events · days ${t.days.join(", ") || "—"} · ${t.n_causal} causal edges</div>
+    <div class="meta">${t.kind || "activity"} · ${t.n_events} events · days ${t.days.join(", ") || "—"} · ${t.n_causal} causal edges</div>
     <p>${t.description || ""}</p>
     <h3>top goals</h3>${t.top_goals.map(g =>
       `<div class="mention">${g[1]} <span style="color:var(--dim)">×${g[2]}</span></div>`).join("") || "—"}
     <h3>top people</h3><div class="meta">${t.top_people.map(p => `${p[0]} ×${p[1]}`).join(", ") || "—"}</div>
     <h3>moods</h3><div class="meta">${t.moods.map(m => `${m[0]} ×${m[1]}`).join(", ") || "—"}</div>
+    ${conn.length ? `<h3>connected themes</h3>` + conn.map(cc =>
+      `<div class="edgecard conn" data-t="${cc.id}">${cc.name}
+        <span style="color:var(--dim)"> →${cc.n_out} / ←${cc.n_in}</span></div>`).join("") : ""}
+    ${rel.length ? `<h3>related insights</h3>` + rel.map(r =>
+      `<div class="edgecard relins" data-i="${r.id}">${r.title}
+        <span style="color:var(--dim)"> ${r.lens}</span></div>`).join("") : ""}
     <button id="tracebtn">zoom into cause → effect</button>`;
   insp.querySelector("#tracebtn").onclick = () => zoomCausal("t" + t.id);
+  insp.querySelectorAll(".conn").forEach(cc =>
+    cc.onclick = () => zoomCausal("t" + cc.dataset.t));
+  insp.querySelectorAll(".relins").forEach(cc =>
+    cc.onclick = () => showInsight(+cc.dataset.i));
 }
 
 // ---------- insights ----------
