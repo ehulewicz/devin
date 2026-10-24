@@ -22,12 +22,20 @@ insight carries the evidence that supports it.
 
 ## Demo script (presentation order)
 
-1. **Open the app → Themes lens (top zoom level).** 8–10 human-readable bubbles
-   ("Final-day party", "Cooking & baking", …) laid out across the week, sized
-   by event count, linked by how many judged links cross between them.
-2. **Click a bubble → Causal lens (middle level).** Only that theme's events on
-   the time axis, only LLM-judged links (INFLUENCES / REFERS_TO / SAME_THREAD),
-   stubs to the themes it feeds into, longest causal "spine" highlighted.
+1. **Open the app → Themes lens (top zoom level).** Two bands of
+   human-readable bubbles ordered across the week:
+   - *What you did* (blue): "Cooking & baking", "Final-day party", …
+   - *How it went with people* (teal): social sub-themes named by the kind of
+     interaction, e.g. "Banter & teasing", including a person when one
+     dominates.
+
+   Bubbles are sized by event count and linked by how many judged links cross
+   between them.
+2. **Click a bubble → Causal lens (middle level).** Only that theme: its
+   events on the time axis, only LLM-judged links (INFLUENCES / REFERS_TO /
+   SAME_THREAD), longest causal "spine" highlighted. The inspector shows the
+   theme card: who's involved, moods, connected themes (click to jump) and
+   related insights (e.g. "Katrina laughs 1.9× as often when you're around").
 3. **Click an event → inspector → "Trace back".** Walks back to the earliest
    root across days; every hop shows the relation, confidence, rationale and
    the quotes that justify it — with ▶ to play the original audio.
@@ -154,7 +162,18 @@ clean/utterances/*.jsonl (heard_by) ──► insights: presence effects (CMH z)
 - Events take the majority theme of their goals; events without goals take
   the nearest theme centroid by embedding. Every event gets exactly one theme.
   Empty themes are dropped.
-- Cached in `data/themes.json` (v1 single-call output kept as `data/themes_v1.json`).
+- **Social split.** Goal-based theming put every interpersonal event into one
+  generic "Social interactions" bucket of 106 events, because goals are
+  task-shaped and social moments have vague goals. Those events are
+  re-themed from their *summaries and participants*:
+  - one LLM call proposes 4–7 themes named by **how** the interaction goes
+    (banter, helping, negotiating, sharing stories, hosting…), with a person in
+    the name if one dominates;
+  - a second pass classifies every event; misses go to the nearest centroid.
+
+  These themes get `kind='social'` (teal band); the rest are `kind='activity'`.
+- Cached in `data/themes.json` and `data/social_themes.json` (v1 single-call
+  output kept as `data/themes_v1.json`).
 
 ### 6. Insights — `cde/insights.py` (what Jake gets out of it)
 **Presence signal.** `EgoLife/clean/utterances/*.jsonl` gives every moment
@@ -217,8 +236,8 @@ Each card stores evidence ids (utterances / events / edges / goals), which
 
   | Level | Shows | Endpoint |
   |---|---|---|
-  | Themes | named theme bubbles | `/api/zoom/themes` |
-  | Causal | events inside one theme, judged links only, spine, cross-theme stubs | `/api/zoom/theme/{id}` |
+  | Themes | named theme bubbles in two bands (activities / social) | `/api/zoom/themes` |
+  | Causal | only the selected theme: its events, judged links among them, the spine; connected themes and related insights listed in the inspector | `/api/zoom/theme/{id}` |
   | All | the full graph | `/api/graph` |
 
   The header has a `themes | causal | all` lens switch (default: themes) and a
@@ -268,6 +287,8 @@ Each card stores evidence ids (utterances / events / edges / goals), which
 | Loosened INFLUENCES (semantic allowed, `[inferred]` tag) | demo needs visible causal claims | more hypotheses; marked as such |
 | Specific goal names (generic labels banned) | "shopping" bubbles tell no story | names are LLM-generated |
 | Two-step themes (name, then classify) | a single call dropped 210 of 270 goals | 6 LLM calls instead of 1 |
+| Split social events by *kind of interaction* | the demo's core is how Jake's interactions go; one "Social interactions" bubble hid all of it | interaction labels are LLM judgments over event summaries |
+| Causal lens shows only the selected theme | cross-theme stubs swamped the view (192 cross edges vs 125 inside the largest theme) | connections live in the inspector, not the canvas |
 | No data doctoring | quotes and audio are clickable, so fake evidence would show instantly; real full-week data already gives strong n | — |
 | Cache everything (`data/extracted`, `judged.json`, `themes.json`) | reruns are free, and survived a CLI session limit mid-run | cache invalidation is manual |
 | SQLite mirroring the Postgres design | zero setup for the hackathon | single-writer |

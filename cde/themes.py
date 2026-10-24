@@ -9,6 +9,8 @@ Run: python -m cde.themes
 """
 import json
 import os
+import re
+import sqlite3
 
 import numpy as np
 
@@ -38,6 +40,67 @@ GOALS:
 @@GOALS@@
 
 Reply with ONLY JSON mapping every goal number to a theme number: {"<goal number>": <theme number>, ...}"""
+
+SOCIAL_NAME_PROMPT = """Below are events from one week of Jake's lifelog that are mainly about social interaction with his housemates (Alice, Tasha, Lucia, Katrina, Shure) and guests. Each line: day, who was involved, mood, summary.
+
+Propose 4-7 SOCIAL THEMES that show HOW the interactions go — the kind of interaction, not the topic. Examples of good names: "Banter & teasing", "Helping & teaching", "Negotiating decisions", "Sharing stories", "Hosting guests", "Friction & disagreements", "Encouraging each other". If one person clearly dominates a kind of interaction, put them in the name (e.g. "Baking lessons with Tasha", "Teasing with Shure").
+Banned words: social, interactions, activities, engagement, general, miscellaneous.
+
+EVENTS:
+@@EVENTS@@
+
+Reply with ONLY JSON: {"themes": [{"name": str, "description": str (one sentence, second person, e.g. "You and Shure ...")}]}"""
+
+SOCIAL_ASSIGN_PROMPT = """Assign each event below to exactly one of these social themes, using the theme number.
+
+THEMES:
+@@THEMES@@
+
+EVENTS:
+@@EVENTS@@
+
+Reply with ONLY JSON mapping every event number to a theme number: {"<event number>": <theme number>, ...}"""
+
+
+def _social_cluster(con, sevs):
+    """Two-step split of one 'social' theme's events into interaction
+    sub-themes. Returns {"themes": [{name, description}],
+    "assign": {event_id: 0-based sub-theme index}}."""
+    ids = [e["id"] for e in sevs]
+    parts = {}
+    if ids:
+        for r in con.execute(
+            f"""SELECT ep.event_id, e.canonical FROM event_participants ep
+                JOIN entities e ON e.id=ep.entity_id
+                WHERE ep.event_id IN ({','.join('?' * len(ids))})""",
+            ids,
+        ):
+            if r["canonical"] != "Jake":
+                parts.setdefault(r["event_id"], []).append(r["canonical"])
+    lines = [
+        f"{i}. D{e['day']} [with: {', '.join(parts.get(e['id'], [])) or '—'}] "
+        f"({e['mood'] or '—'}) {e['summary']}"
+        for i, e in enumerate(sevs, 1)
+    ]
+    data = llm.chat_json(SOCIAL_NAME_PROMPT.replace("@@EVENTS@@", "\n".join(lines)))
+    sths = data.get("themes") or []
+    if not sths:
+        raise RuntimeError("social name step returned no themes")
+    tlist = "\n".join(f"{i}. {t.get('name')} — {t.get('description', '')}"
+                      for i, t in enumerate(sths, 1))
+    assign = {}  # event_id (str) -> 0-based sub-theme index
+    for off in range(0, len(sevs), 50):
+        glist = "\n".join(lines[off:off + 50])
+        m = llm.chat_json(SOCIAL_ASSIGN_PROMPT.replace("@@THEMES@@", tlist)
+                          .replace("@@EVENTS@@", glist))
+        for k, v in (m or {}).items():
+            try:
+                ei, ti = int(k), int(v)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= ei <= len(sevs) and 1 <= ti <= len(sths):
+                assign[str(sevs[ei - 1]["id"])] = ti - 1
+    return {"themes": sths, "assign": assign}
 
 
 def _cluster(goals):
@@ -80,6 +143,10 @@ def _centroid(vectors):
 
 def main():
     con = db.init_db(db.connect())
+    try:
+        con.execute("ALTER TABLE themes ADD COLUMN kind TEXT")
+    except sqlite3.OperationalError:
+        pass
     for t in ("event_themes", "goal_themes", "themes"):
         con.execute(f"DELETE FROM {t}")
     con.commit()
@@ -133,16 +200,19 @@ def main():
         stray += 1
 
     evs = con.execute(
-        "SELECT id, day, t_start, embedding FROM events WHERE subject=? ORDER BY t_start",
+        "SELECT id, day, t_start, summary, mood, embedding FROM events "
+        "WHERE subject=? ORDER BY t_start",
         (SUBJECT,),
     ).fetchall()
     evgoals = {}
+    goalevs = {}
     for r in con.execute(
         """SELECT ee.event_id, ee.entity_id FROM event_entities ee
            JOIN events ev ON ev.id=ee.event_id
            WHERE ee.relation='goal' AND ev.subject=?""",
         (SUBJECT,),
     ):
+        goalevs.setdefault(r["entity_id"], []).append(r["event_id"])
         if r["entity_id"] in gtheme:
             evgoals.setdefault(r["event_id"], []).append(gtheme[r["entity_id"]])
 
@@ -181,6 +251,73 @@ def main():
             "embedding",
         )
 
+    # ---- split 'social/interaction' themes into interaction sub-themes ----
+    kinds = {ti: "activity" for ti in range(len(themes))}
+    split_tis = [ti for ti in range(len(themes))
+                 if re.search(r"social|interaction",
+                              str(themes[ti].get("name") or ""), re.I)]
+    if split_tis:
+        scache_path = os.path.join(db.ROOT, "data", "social_themes.json")
+        soc = (json.load(open(scache_path))
+               if os.path.exists(scache_path) else {})
+        soc_changed = not os.path.exists(scache_path)
+        for ti in split_tis:
+            sevs = [e for e in evs if assigned[e["id"]][0] == ti]
+            key = themes[ti].get("name") or str(ti)
+            entry = soc.get(key)
+            if entry is None:
+                entry = _social_cluster(con, sevs)
+                soc[key] = entry
+                soc_changed = True
+            sths = entry.get("themes") or []
+            amap = entry.get("assign") or {}
+            base = len(themes)
+            for s in sths:
+                themes.append({"name": s.get("name"),
+                               "description": s.get("description", "")})
+                kinds[len(themes) - 1] = "social"
+            sub = {}
+            for e in sevs:
+                try:
+                    v = int(amap.get(str(e["id"])))
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= v < len(sths):
+                    sub[e["id"]] = v
+            subcents = {k: _centroid(unblob(e["embedding"]) for e in sevs
+                                     if sub.get(e["id"]) == k)
+                        for k in range(len(sths))}
+            subcents = {k: v for k, v in subcents.items() if v is not None}
+            subcnt = {}
+            for v in sub.values():
+                subcnt[v] = subcnt.get(v, 0) + 1
+            biggest = max(subcnt, key=subcnt.get) if subcnt else 0
+            for e in sevs:
+                if e["id"] in sub:
+                    continue
+                v = unblob(e["embedding"])
+                sub[e["id"]] = (
+                    max(subcents,
+                        key=lambda k: float(np.dot(_norm(v), subcents[k])))
+                    if v is not None and subcents else biggest)
+            for e in sevs:
+                assigned[e["id"]] = (base + sub[e["id"]], "social")
+            # remap this theme's goals to the sub-theme holding most of each
+            # goal's events (drop the goal_theme row if the goal has none)
+            for gid in [g for g, t2 in gtheme.items() if t2 == ti]:
+                cnt = {}
+                for eid in goalevs.get(gid, []):
+                    a = assigned.get(eid)
+                    if a and base <= a[0] < base + len(sths):
+                        cnt[a[0]] = cnt.get(a[0], 0) + 1
+                if cnt:
+                    gtheme[gid] = max(cnt, key=cnt.get)
+                else:
+                    del gtheme[gid]
+        if soc_changed:
+            with open(scache_path, "w") as f:
+                json.dump(soc, f, indent=1)
+
     counts = {ti: 0 for ti in range(len(themes))}
     days = {ti: set() for ti in range(len(themes))}
     eday = {e["id"]: e["day"] for e in evs}
@@ -194,8 +331,9 @@ def main():
     for ti in keep:
         th = themes[ti]
         cur = con.execute(
-            "INSERT INTO themes(name, description) VALUES(?,?)",
-            (th.get("name") or f"theme {ti + 1}", th.get("description") or ""),
+            "INSERT INTO themes(name, description, kind) VALUES(?,?,?)",
+            (th.get("name") or f"theme {ti + 1}", th.get("description") or "",
+             kinds.get(ti, "activity")),
         )
         tid[ti] = cur.lastrowid
     for gid, ti in gtheme.items():
@@ -224,7 +362,8 @@ def main():
           f"{len(assigned)} events assigned {nsrc}")
     for rank, ti in enumerate(keep):
         th = themes[ti]
-        print(f"#{rank} [{tid[ti]}] {th.get('name')}: {counts[ti]} events, "
+        print(f"#{rank} [{tid[ti]}] {th.get('name')} ({kinds.get(ti, 'activity')}): "
+              f"{counts[ti]} events, "
               f"days {sorted(days[ti])} — {th.get('description', '')[:80]}")
     con.close()
 

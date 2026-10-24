@@ -166,7 +166,8 @@ CREATE TABLE IF NOT EXISTS themes(
     id INTEGER PRIMARY KEY,
     name TEXT,
     description TEXT,
-    rank INTEGER
+    rank INTEGER,
+    kind TEXT                        -- 'activity' | 'social'
 );
 CREATE TABLE IF NOT EXISTS goal_themes(
     goal_entity_id INTEGER PRIMARY KEY,
