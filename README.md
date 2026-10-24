@@ -88,6 +88,7 @@ clean/utterances/*.jsonl (heard_by) ──► insights: presence effects (CMH z)
 | `cde/link.py` | deterministic edges, candidates, judge, `relate()` |
 | `cde/themes.py` | theme clustering for zoom level 1 |
 | `cde/insights.py` | presence effects + insight cards |
+| `cde/social.py` | week-level co-presence / replies / talk-overs / bond for the people panel |
 | `cde/patterns.py` | stretch k-means clusters (superseded by themes) |
 | `cde/api.py` | FastAPI |
 | `cde/audio.py` | original-audio clips per utterance (Ethan) |
@@ -230,6 +231,34 @@ a group-size artifact); only what survived is shown.
 
 Each card stores evidence ids (utterances / events / edges / goals), which
 `/api/insight/{id}` resolves to quotes and events.
+
+### 6b. Social metrics — `cde/social.py` (the people panel)
+Ethan's day-1 social graph, generalised to the whole week. It uses the same
+moments and speaker attribution as the insights stage.
+
+**Tables:** `social_person` holds lines and airtime per person per day;
+`social_pair` holds the per-pair metrics below.
+
+**Per-pair metrics (per day):**
+- *co-presence:* distinct minutes in which both recorders captured the same
+  moment.
+- *replies:* B's line starts ≤ 4 s after A's.
+- *talk-overs:* B starts before A finishes.
+- *hears:* A's lines captured on B's recorder.
+
+**Two corrections to the day-1 method:**
+- Replies and talk-overs are found inside each recorder's own stream and then
+  de-duplicated on the moment pair. Day-1 counts were inflated because every
+  nearby recorder re-counted the same exchange. Our Jake⇄Lucia day-1 replies
+  are 811/821 vs 1,862/1,822, a 2.3× inflation.
+- Co-presence comes from `heard_by` instead of text matching within ±6 s.
+
+**Cross-check:** day 1 still ranks Alice–Tasha as the closest pair, as
+Ethan's analysis did. Over the whole week Jake–Lucia is the strongest pair
+(1,788 co-presence minutes, ~4.4k replies each way).
+
+**Bond (0–100)** uses Ethan's formula: the mean of co-presence, replies and
+exposure, each divided by the maximum over the 15 pairs for the selected days.
 
 ### 7. API + UI
 - **Three zoom levels:**
@@ -403,6 +432,7 @@ python3 -m cde.embed             # embeddings + entity resolution (--goals-only 
 python3 -m cde.link --max-pairs 800   # deterministic + candidates + judge + relate()
 python3 -m cde.themes            # zoom level 1 (delete data/themes.json to re-cluster)
 python3 -m cde.insights          # presence effects + insight cards (~20s, 1 LLM call)
+python3 -m cde.social            # week-level social metrics for the people panel (~10s)
 uvicorn cde.api:app --port 8000  # open http://127.0.0.1:8000
 ```
 

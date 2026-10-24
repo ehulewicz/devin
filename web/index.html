@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>Cognitive Dynamics Engine</title>
 <script src="/web/cytoscape.min.js"></script>
+<link rel="stylesheet" href="/web/social.css">
 <style>
   :root {
     --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e;
@@ -91,6 +92,7 @@
 <div id="goalbar"></div>
 <div id="peoplebar"></div>
 <main>
+  <div id="people"></div>
   <div id="cy"></div>
   <div id="inspector"><p style="color:var(--dim)">Click a node to inspect its evidence.</p></div>
 </main>
@@ -173,6 +175,7 @@ function dayButtons() {
   }
   box.querySelectorAll("button").forEach(b => b.onclick = () => {
     curDays = b.dataset.d; loadGraph();
+    window.socialFocusDays && socialFocusDays(curDays);
   });
 }
 
@@ -303,6 +306,8 @@ async function loadGraph() {
   cy.on('tap', 'node[type="GOAL"]', ev => showGoal(ev.target.data('id').slice(1)));
   updateVisibility();
   loadGoalBar();
+  window.socialFocusTheme && socialFocusTheme(null);
+  window.socialAfterRender && socialAfterRender();
 }
 
 function updateVisibility() {
@@ -523,6 +528,8 @@ async function loadThemes() {
     if (lastTap.id === id && now - lastTap.t < 400) zoomCausal(id);
     else { lastTap = {id, t: now}; showThemeCard(+id.slice(1)); }
   });
+  window.socialFocusTheme && socialFocusTheme(null);
+  window.socialAfterRender && socialAfterRender();
 }
 
 async function loadTheme() {
@@ -563,12 +570,15 @@ async function loadTheme() {
     cy.edges(`[source="e${sp[i]}"][target="e${sp[i + 1]}"]`).addClass("chain");
   cy.on('tap', 'node[type="EVENT"]', ev => inspect(ev.target.data('id').slice(1)));
   showThemeCard(curTheme, d);
+  window.socialFocusTheme && socialFocusTheme(curTheme);
+  window.socialAfterRender && socialAfterRender();
 }
 
 async function showThemeCard(tid, zoom) {
   if (!lastThemes) await fetchThemes();
   const t = (lastThemes || []).find(x => x.id === tid);
   if (!t) return;
+  window.socialFocusTheme && socialFocusTheme(tid);
   if (!zoom) zoom = await api(`/api/zoom/theme/${tid}`);
   const conn = (zoom && zoom.connected) || [];
   const rel = (zoom && zoom.related_insights) || [];
@@ -846,5 +856,7 @@ api("/api/graph?subject=A1_JAKE&days=1-7").then(d => {
   if (!lastData) { lastData = d; loadGoalBar(); }
 });
 </script>
+<script src="/web/social.js"></script>
+<script>socialInit();</script>
 </body>
 </html>

@@ -201,14 +201,8 @@ def people(subject: str = "A1_JAKE"):
              "patterns_out": r["out_p"], "patterns_in": r["in_p"]} for r in rows]
 
 
-@app.get("/api/person/{pid}/patterns")
-def person_patterns(pid: int):
-    """Flagged INTERACTION_PATTERN edges in/out of one person, with per-day stats."""
-    c = con()
-    p = c.execute("SELECT id, canonical FROM entities WHERE id=? AND type='PERSON'",
-                  (pid,)).fetchone()
-    if not p:
-        return {"error": "not found"}
+def _patterns_for(c, pid):
+    """Flagged INTERACTION_PATTERN edges in/out of one person entity."""
     names = {r["id"]: r["canonical"] for r in c.execute(
         "SELECT id, canonical FROM entities")}
     out = []
@@ -235,6 +229,19 @@ def person_patterns(pid: int):
             "status": r["status"], "evidence_type": r["evidence_type"],
             "z": r["retrieval_score"], "rationale": r["rationale"],
             "days": days, "quotes": quotes})
+    return out
+
+
+@app.get("/api/person/{pid}/patterns")
+def person_patterns(pid: int):
+    """Flagged INTERACTION_PATTERN edges in/out of one person, with per-day stats."""
+    c = con()
+    p = c.execute("SELECT id, canonical FROM entities WHERE id=? AND type='PERSON'",
+                  (pid,)).fetchone()
+    if not p:
+        c.close()
+        return {"error": "not found"}
+    out = _patterns_for(c, pid)
     c.close()
     return {"id": pid, "name": p["canonical"], "patterns": out}
 
@@ -499,6 +506,292 @@ def zoom_theme(tid: int, subject: str = "A1_JAKE"):
     c.close()
     return {"theme": card, "nodes": nodes, "edges": edges, "spine": spine,
             "connected": connected_list, "related_insights": related}
+
+
+# ---------- social orbit (Ethan's ego graph merged into the main page) ----------
+
+WEARERS = ["Jake", "Alice", "Tasha", "Lucia", "Katrina", "Shure"]
+WEARER_CODE = {n: f"A{i + 1}" for i, n in enumerate(WEARERS)}
+EFFECT_VERB = {"question": "asks questions", "directive": "gives directions",
+               "laughter": "laughs", "assent": "says yes/okay",
+               "planning": "talks plans", "talk_share": "talks"}
+
+
+def _day_range(days):
+    lo, hi = 1, 7
+    if days and "-" in days:
+        lo, hi = [int(x) for x in days.split("-", 1)]
+    elif days:
+        lo = hi = int(days)
+    return lo, hi
+
+
+def _pair_aggs(c, lo, hi):
+    try:
+        rows = c.execute(
+            """SELECT a, b, SUM(copresence_min) cop, SUM(b_replies_a) bra,
+                      SUM(a_replies_b) arb, SUM(a_over_b) aob, SUM(b_over_a) boa,
+                      SUM(b_hears_a) bha, SUM(a_hears_b) ahb
+               FROM social_pair WHERE day BETWEEN ? AND ? GROUP BY a, b""",
+            (lo, hi)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    mcop = max([r["cop"] for r in rows] or [0]) or 1
+    mrep = max([(r["arb"] or 0) + (r["bra"] or 0) for r in rows] or [0]) or 1
+    mexp = max([(r["ahb"] or 0) + (r["bha"] or 0) for r in rows] or [0]) or 1
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["replies"] = (r["arb"] or 0) + (r["bra"] or 0)
+        d["exp"] = (r["ahb"] or 0) + (r["bha"] or 0)
+        d["bond"] = round(100 * (d["cop"] / mcop + d["replies"] / mrep
+                                 + d["exp"] / mexp) / 3)
+        out.append(d)
+    return out
+
+
+def _notable(r):
+    if (r["n_with"] or 0) < 100 or (r["n_without"] or 0) < 100 \
+            or abs(r["z"] or 0) < 4:
+        return False
+    hi, lo = (1.1, 0.9) if r["other"] == "GROUP" else (1.25, 0.8)
+    return r["lift"] >= hi or r["lift"] <= lo
+
+
+def _effect_view(r):
+    return {"feature": r["feature"],
+            "text": f"{EFFECT_VERB.get(r['feature'], r['feature'])} {r['lift']:.1f}×",
+            "lift": r["lift"], "z": r["z"],
+            "p_with": r["p_with"], "p_without": r["p_without"],
+            "n_with": r["n_with"], "n_without": r["n_without"],
+            "examples": json.loads(r["examples_json"] or "[]")}
+
+
+def _notables(c, subject, other):
+    return [_effect_view(r) for r in c.execute(
+        "SELECT * FROM presence_effects WHERE subject=? AND other=?",
+        (subject, other)) if _notable(r)]
+
+
+def _insights_mentioning(c, names, lenses=None, limit=8):
+    out = []
+    try:
+        q = "SELECT id, title, lens, body FROM insights"
+        args = []
+        if lenses:
+            q += f" WHERE lens IN ({','.join('?' * len(lenses))})"
+            args = list(lenses)
+        for r in c.execute(q + " ORDER BY rank", args):
+            txt = f"{r['title'] or ''} {r['body'] or ''}".lower()
+            if names is None or any(n.lower() in txt for n in names):
+                out.append({"id": r["id"], "title": r["title"], "lens": r["lens"]})
+                if len(out) >= limit:
+                    break
+    except sqlite3.OperationalError:
+        pass
+    return out
+
+
+@app.get("/api/social")
+def social(days: str = "1-7", theme: int = None):
+    c = con()
+    lo, hi = _day_range(days)
+    try:
+        prows = c.execute(
+            """SELECT person, SUM(lines) lines, SUM(airtime_s) airtime
+               FROM social_person WHERE day BETWEEN ? AND ? GROUP BY person""",
+            (lo, hi)).fetchall()
+    except sqlite3.OperationalError:
+        c.close()
+        return {"days": days, "theme": None, "people": [], "pairs": []}
+    total = sum(r["lines"] or 0 for r in prows) or 1
+    by_name = {r["person"]: r for r in prows}
+
+    tinfo = None
+    if theme:
+        tinfo = c.execute("SELECT id, name, kind FROM themes WHERE id=?",
+                          (theme,)).fetchone()
+    theme_row = ({"id": tinfo["id"], "name": tinfo["name"], "kind": tinfo["kind"]}
+                 if tinfo else None)
+    part = {}
+    if tinfo:
+        for r in c.execute(
+            """SELECT e.canonical p, ev.id eid FROM event_themes et
+               JOIN events ev ON ev.id=et.event_id
+               JOIN event_participants ep ON ep.event_id=ev.id
+               JOIN entities e ON e.id=ep.entity_id
+               WHERE et.theme_id=?""", (theme,)):
+            part.setdefault(r["p"], set()).add(r["eid"])
+
+    badges = {}
+    for name in WEARERS:
+        other = "GROUP" if name == "Jake" else "Jake"
+        rows = _notables(c, name, other)
+        if rows:
+            r = max(rows, key=lambda x: abs(x["z"] or 0))
+            badges[name] = {"text": r["text"] + (" vs group" if name == "Jake"
+                                                 else " around Jake"),
+                            "lift": r["lift"], "z": r["z"]}
+
+    pairs = []
+    for p in _pair_aggs(c, lo, hi):
+        pairs.append({"a": p["a"], "b": p["b"], "copresence_min": p["cop"],
+                      "replies": p["replies"], "a_replies_b": p["arb"],
+                      "b_replies_a": p["bra"], "a_over_b": p["aob"],
+                      "b_over_a": p["boa"], "a_hears_b": p["ahb"],
+                      "b_hears_a": p["bha"], "bond": p["bond"],
+                      "co_events": (len(part.get(p["a"], set())
+                                        & part.get(p["b"], set()))
+                                    if tinfo else None)})
+    people = [{"name": n, "code": WEARER_CODE[n],
+               "lines": by_name[n]["lines"] if n in by_name else 0,
+               "airtime_s": by_name[n]["airtime"] if n in by_name else 0,
+               "share": ((by_name[n]["lines"] or 0) / total if n in by_name else 0),
+               "is_subject": 1 if n == "Jake" else 0,
+               "participation": (len(part.get(n, ())) if tinfo else None),
+               "badge": badges.get(n)}
+              for n in WEARERS]
+    c.close()
+    return {"days": days, "theme": theme_row, "people": people, "pairs": pairs}
+
+
+@app.get("/api/social/person/{name}")
+def social_person(name: str, days: str = "1-7"):
+    c = con()
+    if name not in WEARERS:
+        c.close()
+        return {"error": "unknown person"}
+    lo, hi = _day_range(days)
+    try:
+        rows = c.execute(
+            """SELECT day, lines, airtime_s FROM social_person
+               WHERE person=? AND day BETWEEN ? AND ? ORDER BY day""",
+            (name, lo, hi)).fetchall()
+        tot = {r["person"]: r["l"] for r in c.execute(
+            """SELECT person, SUM(lines) l FROM social_person
+               WHERE day BETWEEN ? AND ? GROUP BY person""", (lo, hi))}
+    except sqlite3.OperationalError:
+        rows, tot = [], {}
+    lines = sum(r["lines"] or 0 for r in rows)
+    air = sum(r["airtime_s"] or 0 for r in rows)
+    total = sum(tot.values()) or 1
+    rank = 1 + sum(1 for v in tot.values() if v > (tot.get(name) or 0))
+    bonds = sorted(
+        ({"other": (p["b"] if p["a"] == name else p["a"]),
+          "bond": p["bond"], "copresence_min": p["cop"], "replies": p["replies"]}
+         for p in _pair_aggs(c, lo, hi) if name in (p["a"], p["b"])),
+        key=lambda x: -x["bond"])
+    ent = c.execute("SELECT id FROM entities WHERE type='PERSON' AND canonical=?",
+                    (name,)).fetchone()
+    if name == "Jake":
+        event_ids = [r["id"] for r in c.execute(
+            "SELECT id FROM events WHERE subject='A1_JAKE'")]
+        ins = _insights_mentioning(c, None, lenses=("self", "portrait"))
+    else:
+        event_ids = [r["event_id"] for r in c.execute(
+            """SELECT DISTINCT ep.event_id FROM event_participants ep
+               JOIN entities e ON e.id=ep.entity_id
+               JOIN events ev ON ev.id=ep.event_id
+               WHERE e.canonical=? AND ev.subject='A1_JAKE'""", (name,))]
+        ins = _insights_mentioning(c, [name])
+    theme_share = []
+    for t in c.execute("SELECT id, name, kind FROM themes"):
+        n_ev = c.execute("SELECT COUNT(*) c FROM event_themes WHERE theme_id=?",
+                         (t["id"],)).fetchone()["c"]
+        n_w = c.execute(
+            """SELECT COUNT(DISTINCT et.event_id) c FROM event_themes et
+               JOIN event_participants ep ON ep.event_id=et.event_id
+               JOIN entities e ON e.id=ep.entity_id
+               WHERE et.theme_id=? AND e.canonical=?""",
+            (t["id"], name)).fetchone()["c"]
+        theme_share.append({"theme_id": t["id"], "name": t["name"],
+                            "kind": t["kind"], "n_with": n_w,
+                            "n_events": n_ev,
+                            "share": n_w / n_ev if n_ev else 0})
+    effects_around = _notables(c, name, "Jake")
+    jake_around = _notables(c, "Jake", name)
+    self_effects = _notables(c, name, "GROUP")
+    patterns = _patterns_for(c, ent["id"]) if ent else []
+    c.close()
+    return {"name": name, "code": WEARER_CODE[name],
+            "is_subject": 1 if name == "Jake" else 0,
+            "lines": lines, "airtime_s": air, "share": lines / total,
+            "rank": rank,
+            "per_day": [{"day": r["day"], "lines": r["lines"]} for r in rows],
+            "bonds": bonds,
+            "effects_around_jake": effects_around,
+            "jake_around_them": jake_around,
+            "self_effects": self_effects,
+            "patterns": patterns,
+            "insights": ins, "event_ids": event_ids,
+            "theme_share": theme_share}
+
+
+@app.get("/api/social/pair")
+def social_pair_view(a: str, b: str, days: str = "1-7"):
+    c = con()
+    if a not in WEARERS or b not in WEARERS or a == b:
+        c.close()
+        return {"error": "bad pair"}
+    a, b = sorted((a, b), key=WEARERS.index)
+    lo, hi = _day_range(days)
+    try:
+        per_day = [dict(r) for r in c.execute(
+            """SELECT day, copresence_min, a_replies_b, b_replies_a,
+                      a_over_b, b_over_a
+               FROM social_pair WHERE a=? AND b=? AND day BETWEEN ? AND ?
+               ORDER BY day""", (a, b, lo, hi))]
+    except sqlite3.OperationalError:
+        per_day = []
+    agg = next((p for p in _pair_aggs(c, lo, hi)
+                if p["a"] == a and p["b"] == b), None)
+    totals = {"copresence_min": agg["cop"], "replies": agg["replies"],
+              "a_replies_b": agg["arb"], "b_replies_a": agg["bra"],
+              "a_over_b": agg["aob"], "b_over_a": agg["boa"],
+              "a_hears_b": agg["ahb"], "b_hears_a": agg["bha"]} if agg else {}
+    effects = ([dict(e, subject=a, other=b) for e in _notables(c, a, b)]
+               + [dict(e, subject=b, other=a) for e in _notables(c, b, a)])
+    ents = {r["canonical"]: r["id"] for r in c.execute(
+        "SELECT id, canonical FROM entities WHERE type='PERSON'")}
+    patterns = []
+    if a in ents and b in ents:
+        for r in c.execute(
+            """SELECT * FROM edges WHERE relation='INTERACTION_PATTERN'
+               AND status!='rejected' AND src_type='PERSON' AND dst_type='PERSON'
+               AND ((src_id=? AND dst_id=?) OR (src_id=? AND dst_id=?))""",
+            (ents[a], ents[b], ents[b], ents[a])):
+            src = "a" if r["src_id"] == ents[a] else "b"
+            patterns.append({"direction": f"{a}→{b}" if src == "a" else f"{b}→{a}",
+                             "rationale": r["rationale"],
+                             "lift": r["retrieval_score"], "status": r["status"]})
+    if "Jake" in (a, b):
+        other = b if a == "Jake" else a
+        evq = c.execute(
+            """SELECT ev.id, ev.day, ev.t_start, ev.summary FROM events ev
+               JOIN event_participants ep ON ep.event_id=ev.id
+               JOIN entities e ON e.id=ep.entity_id
+               WHERE e.canonical=? AND ev.subject='A1_JAKE'
+               ORDER BY ev.t_start DESC LIMIT 12""", (other,)).fetchall()
+    else:
+        evq = c.execute(
+            """SELECT ev.id, ev.day, ev.t_start, ev.summary FROM events ev
+               WHERE ev.subject='A1_JAKE'
+               AND EXISTS (SELECT 1 FROM event_participants ep
+                           JOIN entities e ON e.id=ep.entity_id
+                           WHERE ep.event_id=ev.id AND e.canonical=?)
+               AND EXISTS (SELECT 1 FROM event_participants ep
+                           JOIN entities e ON e.id=ep.entity_id
+                           WHERE ep.event_id=ev.id AND e.canonical=?)
+               ORDER BY ev.t_start DESC LIMIT 12""", (a, b)).fetchall()
+    shared = [{"id": r["id"], "day": r["day"],
+               "hms": f"{int(r['t_start'] % 86400 // 3600):02d}:"
+                      f"{int(r['t_start'] % 3600 // 60):02d}",
+               "summary": r["summary"]} for r in evq]
+    ins = _insights_mentioning(c, [x for x in (a, b) if x != "Jake"])
+    c.close()
+    return {"a": a, "b": b, "bond": agg["bond"] if agg else 0,
+            "per_day": per_day, "totals": totals, "effects": effects,
+            "patterns": patterns, "shared_events": shared, "insights": ins}
 
 
 # ---------- insights ----------

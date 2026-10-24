@@ -1,0 +1,19 @@
+#people { width:300px; min-width:300px; background:var(--panel);
+  border-right:1px solid var(--border); display:flex; flex-direction:column; }
+#people-hdr { padding:8px 12px; font-size:12px; border-bottom:1px solid var(--border);
+  display:flex; align-items:baseline; gap:6px; }
+#people-hdr b { font-size:13px; }
+#people-filter { color:var(--dim); font-size:11px; }
+#pf-clear { color:var(--red); cursor:pointer; margin-left:3px; }
+#pcy { flex:1; min-height:0; }
+#people-legend { padding:6px 12px; font-size:10px; color:var(--dim);
+  border-top:1px solid var(--border); }
+.ptable { border-collapse:collapse; width:100%; font-size:11px; margin:4px 0; }
+.ptable td, .ptable th { border:1px solid var(--border); padding:2px 6px;
+  text-align:right; color:var(--dim); }
+.ptable td:first-child, .ptable th:first-child { text-align:left; color:var(--fg); }
+.bondbar { display:flex; align-items:center; gap:6px; margin:2px 0; font-size:12px; }
+.bondbar .bn { width:56px; }
+.bondbar .btr { flex:1; background:#21262d; border-radius:3px; height:9px; }
+.bondbar .bf { display:block; height:100%; border-radius:3px; background:var(--accent); }
+.bondbar .bv { width:28px; text-align:right; color:var(--accent); font-weight:600; }
