@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CDE — Social Graph & Trends</title>
+<script src="cytoscape.min.js"></script>
+<script src="trends-data.js"></script>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e;
+    --accent:#f0883e; --blue:#58a6ff; --green:#3fb950; --purple:#bc8cff; --red:#f85149;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:13px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif; height:100vh;
+         display:flex; flex-direction:column; }
+  header { padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--border);
+           display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .hint { color:var(--dim); font-size:12px; }
+  .mbtn { background:#21262d; color:var(--fg); border:1px solid var(--border); border-radius:6px;
+          padding:3px 10px; margin-right:4px; cursor:pointer; font-size:12px; }
+  .mbtn.on { background:var(--accent); border-color:var(--accent); color:#0d1117; font-weight:600; }
+  .mbtn.ghost { margin-left:auto; }
+  a.mlink { color:var(--blue); font-size:12px; text-decoration:none; }
+  main { flex:1; display:flex; min-height:0; }
+  #cy { flex:1; min-width:0; }
+  #inspector { width:420px; background:var(--panel); border-left:1px solid var(--border);
+               overflow-y:auto; padding:14px; }
+  #inspector h2 { font-size:15px; margin:0 0 4px; }
+  #inspector .meta { color:var(--dim); margin-bottom:10px; font-size:12px; }
+  #inspector h3 { font-size:11px; color:var(--dim); text-transform:uppercase;
+                  letter-spacing:.06em; margin:16px 0 6px; }
+  .statgrid { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  .stat { background:#1c2128; border:1px solid var(--border); border-radius:6px;
+          padding:6px 10px; font-size:12px; }
+  .stat b { display:block; font-size:16px; color:var(--fg); }
+  .bars { display:flex; align-items:flex-end; gap:3px; height:80px; margin:6px 0 2px; }
+  .barcol { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; position:relative; }
+  .barcol .cap { width:100%; background:#30363d; border-radius:2px 2px 0 0; }
+  .barcol .own { width:60%; background:var(--accent); border-radius:2px 2px 0 0; position:absolute; bottom:0; }
+  .barcol:hover .cap { background:#484f58; }
+  .hlabels { display:flex; gap:3px; }
+  .hlabels span { flex:1; text-align:center; font-size:9px; color:var(--dim); }
+  .legendrow { font-size:10px; color:var(--dim); margin-top:2px; }
+  .legendrow i { display:inline-block; width:10px; height:10px; border-radius:2px;
+                 vertical-align:-1px; margin-right:4px; }
+  .hbar { display:flex; align-items:center; gap:6px; margin:3px 0; font-size:12px; }
+  .hbar .nm { width:86px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hbar .tr { flex:1; background:#21262d; border-radius:3px; height:12px; position:relative; }
+  .hbar .fl { background:var(--blue); height:100%; border-radius:3px; }
+  .hbar .fl.own { background:var(--accent); }
+  .hbar .fl.green { background:var(--green); }
+  .hbar .vl { width:56px; text-align:right; color:var(--dim); font-size:11px; }
+  .pairrow { padding:5px 8px; border:1px solid var(--border); border-radius:6px; margin:4px 0;
+             cursor:pointer; font-size:12px; display:flex; justify-content:space-between; }
+  .pairrow:hover { border-color:var(--blue); }
+  .pairrow .v { color:var(--accent); }
+  .note { border-left:3px solid var(--accent); background:#1c2128; padding:6px 10px;
+          margin:8px 0; font-size:12px; border-radius:0 6px 6px 0; }
+  .note.assumed { border-left-color:var(--purple); }
+  .note .tag { font-size:10px; color:var(--purple); font-weight:700; letter-spacing:.05em; }
+  .backbtn { width:100%; margin-top:12px; padding:7px; background:#21262d; color:var(--fg);
+             border:1px solid var(--border); border-radius:6px; cursor:pointer; font-size:12px; }
+  ul.tight { margin:4px 0; padding-left:18px; font-size:12px; }
+  ul.tight li { margin:3px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Social Graph &amp; Trends</h1>
+  <span>
+    edge metric:
+    <button class="mbtn on" data-m="copresence">co-presence</button>
+    <button class="mbtn" data-m="replies">replies</button>
+    <button class="mbtn" data-m="exposure">exposure</button>
+  </span>
+  <button class="mbtn" id="fit">⤢ fit</button>
+  <span class="hint">scroll to zoom · click a person or an edge for detail · click empty space to reset</span>
+  <a class="mlink" href="/">event graph →</a>
+</header>
+<main>
+  <div id="cy"></div>
+  <div id="inspector"><p style="color:var(--dim)">Loading…</p></div>
+</main>
+<script>
+const D = window.TRENDS_DATA;
+const $ = s => document.querySelector(s);
+const WEARERS = Object.keys(D.users);                    // ["A1_JAKE", ...]
+const CODE = {}, NAME = {}, COLOR = {};
+const PALETTE = ["#f0883e","#58a6ff","#3fb950","#bc8cff","#e3b341","#79c0ff"];
+WEARERS.forEach((w,i) => { CODE[w] = w.split("_")[0]; NAME[w] = w.split("_")[1]; COLOR[w] = PALETTE[i]; });
+const CODE2W = Object.fromEntries(WEARERS.map(w => [CODE[w], w]));
+
+// ---------- pair metrics ----------
+const REPLY = {};   // "A1-A4" -> {f: replies a->b, b: replies b->a} in key order
+for (const e of D.reply_edges_top) {
+  const wa = WEARERS.find(w => NAME[w] === e.from), wb = WEARERS.find(w => NAME[w] === e.to);
+  if (!wa || !wb) continue;
+  const key = [CODE[wa], CODE[wb]].sort().join("-");
+  REPLY[key] = REPLY[key] || {};
+  REPLY[key][CODE[wa] < CODE[wb] ? "f" : "b"] =
+      (REPLY[key][CODE[wa] < CODE[wb] ? "f" : "b"] || 0) + e.replies;
+}
+function pairKey(wa, wb) { return [CODE[wa], CODE[wb]].sort().join("-"); }
+function pairMetrics(wa, wb) {
+  const k = pairKey(wa, wb), cp = D.co_presence[k] || {}, rp = REPLY[k] || {};
+  const [c1, c2] = k.split("-");
+  const w1 = CODE2W[c1], w2 = CODE2W[c2];
+  const heard12 = (D.users[w1].speakers_heard[NAME[w2]] || 0);
+  const heard21 = (D.users[w2].speakers_heard[NAME[w1]] || 0);
+  return { key: k, w1, w2,
+           shared: cp.shared_utterances || 0, span: cp.span_hours || 0,
+           first: cp.first, last: cp.last,
+           r12: rp.f || 0, r21: rp.b || 0,
+           heard12, heard21,
+           replies: (rp.f || 0) + (rp.b || 0),
+           exposure: heard12 + heard21 };
+}
+const PAIRS = [];
+for (let i = 0; i < WEARERS.length; i++)
+  for (let j = i + 1; j < WEARERS.length; j++)
+    PAIRS.push(pairMetrics(WEARERS[i], WEARERS[j]));
+
+const METRICS = {
+  copresence: { get: p => p.shared,  label: "shared utterances", fmt: v => v },
+  replies:    { get: p => p.replies, label: "replies",           fmt: v => v },
+  exposure:   { get: p => p.exposure,label: "heard each other",  fmt: v => v },
+};
+let metric = "copresence";
+const maxFor = m => Math.max(...PAIRS.map(METRICS[m].get));
+
+// ---------- narratives (from analysis/TRENDS.md) ----------
+const NOTES = {
+  A1_JAKE: [
+    "Hub of the group: top-3 conversation partner for every other wearer; highest self-share of speech (34%).",
+    "Latest night of anyone (recording to 22:05); loud morning block 11–13, evening resume 17–20.",
+    "Most-captured other voice in all five transcripts — in Alice's and Tasha's files he's heard more than they hear themselves."],
+  A2_ALICE: [
+    "Quiet center: highest co-presence totals overall but lowest self-share (19%) — always present, rarely heard.",
+    "Strongest pair bond in the dataset is Alice–Tasha (2,143 shared utterances / 9.5h).",
+    "Co-presence edges credit her correctly where extraction would miss her — argues for heard_by/WITNESSED edges."],
+  A3_TASHA: [
+    "Connector: bridges Alice, Lucia, Katrina; mid-to-high engagement with everyone.",
+    "Alice⇄Tasha is the strongest non-Jake reply dyad (1,438 / 1,324).",
+    "Earliest recording end besides Shure's split — file stops 20:45."],
+  A4_LUCIA: [
+    "Jake's primary partner — Jake⇄Lucia is the single busiest dyad (3,684 combined replies).",
+    "Second-most-heard voice group-wide; strong independent ties to Katrina, Tasha, Alice.",
+    "Plausible co-runner of group logistics alongside Jake."],
+  A5_KATRINA: [
+    "Steady mid-tier: lowest total capture (8,204) and the thinnest afternoon (81 utts at 14h).",
+    "Balanced ties — Lucia⇄Katrina and Shure⇄Katrina both ~900 replies each way.",
+    "Her afternoon lull reads as an individual off-camera stretch, not a group event."],
+  A6_SHURE: [
+    "Semi-detached evenings: co-presence with every wearer ends ~18:37 while his recorder runs to 22:09.",
+    "17:00 spike is the largest single hour anywhere (2,144 captured — a big group moment).",
+    "Only file containing 'Shure's GF' (382) and 'Sister' (57) — a private social thread outside the group."],
+};
+const ASSUMED = {
+  A1_JAKE: "Week: extracted goals (party/BBQ, auction, schedule rework) are group-facing — likely remains coordination hub; surviving INFLUENCES hypotheses mostly radiate from his plans.",
+  A2_ALICE: "Week: stable sub-thread with Tasha inside the group graph; expect shared events to cluster together.",
+  A3_TASHA: "Week: Alice–Tasha pairing persists as a sub-thread; her earlier departures may repeat.",
+  A4_LUCIA: "Week: second node of the social core; day-3 grill rehearsal / day-4 BBQ replan likely co-run with Jake.",
+  A5_KATRINA: "Week: mid-core member; afternoon off-camera stretches may recur.",
+  A6_SHURE: "Week: recurring evening splits + GF/sister events form a parallel thread in his part of the graph.",
+};
+
+// ---------- graph ----------
+let cy;
+function buildGraph() {
+  const mx = maxFor(metric);
+  const els = [];
+  for (const w of WEARERS) {
+    const u = D.users[w];
+    els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
+                       own: u.own_utterances, captured: u.utterances_captured }});
+  }
+  for (const p of PAIRS) {
+    const v = METRICS[metric].get(p);
+    els.push({ data: { id: "p" + p.key, source: CODE[p.w1], target: CODE[p.w2],
+                       pair: p.key, v, norm: v / mx }});
+  }
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: $("#cy"), elements: els, wheelSensitivity: 0.25,
+    minZoom: 0.3, maxZoom: 5,
+    layout: { name: "cose", animate: false, nodeRepulsion: 9000,
+              idealEdgeLength: e => 220 - 140 * e.data("norm"), edgeElasticity: 50 },
+    style: [
+      { selector: "node", style: {
+          "background-color": n => COLOR[n.data("wearer")],
+          "width": n => 26 + 42 * (n.data("own") / 3100),
+          "height": n => 26 + 42 * (n.data("own") / 3100),
+          "label": n => n.data("name") + "\\n" + n.data("own") + " utts",
+          "color": "#e6edf3", "font-size": 11, "text-valign": "bottom",
+          "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": "90px",
+          "border-width": 0 }},
+      { selector: "edge", style: {
+          "width": e => 1 + 11 * e.data("norm"),
+          "line-color": "#3d444d", "opacity": 0.75,
+          "curve-style": "bezier",
+          "label": e => METRICS[metric].fmt(e.data("v")),
+          "font-size": 10, "color": "#e6edf3", "text-opacity": 0,
+          "text-background-color": "#0d1117", "text-background-opacity": 0.85,
+          "text-background-padding": 2 }},
+      { selector: ".faded", style: { "opacity": 0.12 }},
+      { selector: "edge.hi", style: { "line-color": "#f0883e", "opacity": 1 }},
+      { selector: "node.hi", style: { "border-width": 3, "border-color": "#ffd33d" }},
+    ],
+  });
+  cy.on("zoom", () => {
+    const t = cy.zoom() > 0.75 ? 1 : 0;
+    cy.edges().forEach(e => { if (e.style("text-opacity") != t) e.style("text-opacity", t); });
+  });
+  cy.on("tap", "node", ev => focusNode(ev.target));
+  cy.on("tap", "edge", ev => focusEdge(ev.target));
+  cy.on("tap", ev => { if (ev.target === cy) resetView(); });
+}
+
+function setMetric(m) {
+  metric = m;
+  document.querySelectorAll(".mbtn[data-m]").forEach(b =>
+    b.classList.toggle("on", b.dataset.m === m));
+  const mx = maxFor(m);
+  cy.edges().forEach(e => {
+    const p = PAIRS.find(x => "p" + x.key === e.id());
+    const v = METRICS[m].get(p);
+    e.data("v", v); e.data("norm", v / mx);
+  });
+  cy.layout({ name: "cose", animate: true, animationDuration: 400, nodeRepulsion: 9000,
+              idealEdgeLength: e => 220 - 140 * e.data("norm"), edgeElasticity: 50 }).run();
+}
+document.querySelectorAll(".mbtn[data-m]").forEach(b => b.onclick = () => setMetric(b.dataset.m));
+$("#fit").onclick = () => { cy.animate({ fit: { padding: 60 } }, { duration: 300 }); };
+
+// ---------- focus / detail ----------
+function hilite(eles) {
+  cy.elements().addClass("faded").removeClass("hi");
+  eles.removeClass("faded").addClass("hi");
+}
+function resetView() {
+  cy.elements().removeClass("faded hi");
+  cy.animate({ fit: { padding: 60 } }, { duration: 300 });
+  showOverview();
+}
+function focusNode(n) {
+  const hood = n.closedNeighborhood();
+  hilite(hood);
+  cy.animate({ fit: { eles: hood, padding: 90 } }, { duration: 400 });
+  showUser(n.data("wearer"));
+}
+function focusEdge(e) {
+  const g = e.union(e.connectedNodes());
+  hilite(g);
+  cy.animate({ fit: { eles: g, padding: 140 } }, { duration: 400 });
+  const [w1, w2] = e.data("pair").split("-").map(c => CODE2W[c]);
+  showPair(pairMetrics(w1, w2));
+}
+
+// ---------- inspector renderers ----------
+function bar(u) {
+  const hrs = u.hourly;
+  const hs = Object.keys(hrs).map(Number).sort((a,b)=>a-b);
+  const lo = hs[0], hi = hs[hs.length-1];
+  const mx = Math.max(...hs.map(h => hrs[h].captured));
+  let cols = "", labs = "";
+  for (let h = lo; h <= hi; h++) {
+    const c = hrs[h] ? hrs[h].captured : 0, o = hrs[h] ? hrs[h].own : 0;
+    cols += `<div class="barcol" title="${h}:00 — ${c} captured, ${o} own">
+      <div class="cap" style="height:${Math.round(76*c/mx)}px"></div>
+      <div class="own" style="height:${Math.round(76*o/mx)}px"></div></div>`;
+    labs += `<span>${h}</span>`;
+  }
+  return `<div class="bars">${cols}</div><div class="hlabels">${labs}</div>
+    <div class="legendrow"><i style="background:#30363d"></i>captured around wearer
+    <i style="background:var(--accent);margin-left:10px"></i>wearer's own speech</div>`;
+}
+function hbars(items, cls) {
+  const mx = Math.max(...items.map(x => x[1]), 1);
+  return items.map(([nm, v]) =>
+    `<div class="hbar"><span class="nm">${nm}</span>
+     <span class="tr"><span class="fl ${cls||""}" style="width:${Math.round(100*v/mx)}%"></span></span>
+     <span class="vl">${v}</span></div>`).join("");
+}
+function pairTable(sortKey) {
+  return PAIRS.slice().sort((a,b) => METRICS[metric].get(b) - METRICS[metric].get(a))
+    .map(p => `<div class="pairrow" data-p="${p.key}">
+      <span>${NAME[p.w1]} ⇄ ${NAME[p.w2]}</span>
+      <span class="v">${METRICS[metric].fmt(METRICS[metric].get(p))}</span></div>`).join("");
+}
+function bindPairRows() {
+  document.querySelectorAll(".pairrow").forEach(r => r.onclick = () => {
+    const e = cy.getElementById("p" + r.dataset.p);
+    if (e.nonempty()) focusEdge(e);
+  });
+}
+
+function groupRhythm() {
+  const acc = {};
+  for (const w of WEARERS)
+    for (const [h, v] of Object.entries(D.users[w].hourly)) {
+      acc[h] = acc[h] || [0,0]; acc[h][0] += v.captured; acc[h][1] += v.own;
+    }
+  return bar({ hourly: acc });
+}
+
+function showOverview() {
+  const sorted = PAIRS.slice().sort((a,b)=>b.shared-a.shared);
+  const best = sorted[0], early = sorted.filter(p => p.span < 8);
+  $("#inspector").innerHTML = `
+    <h2>Group overview — day 1</h2>
+    <div class="meta">6 wearers · ${Object.values(D.users).reduce((s,u)=>s+u.utterances_captured,0).toLocaleString()}
+      utterances captured · edge metric: <b>${METRICS[metric].label}</b></div>
+    <h3>group rhythm (all wearers)</h3>
+    ${groupRhythm()}
+    <div class="note">Universal capture gap ~14:30–17:00 in all six files — a scheduled break, not six
+      coincidences. Loud group block 17–19, taper after 20.</div>
+    <h3>pairs by ${METRICS[metric].label}</h3>
+    ${pairTable()}
+    <div class="note">Strongest bond: <b>${NAME[best.w1]} ⇄ ${NAME[best.w2]}</b>
+      (${best.shared.toLocaleString()} shared utterances / ${best.span}h).</div>
+    ${early.length ? `<div class="note">Every Shure pair caps at ~7.5h and ends ~18:37 — he splits off
+      from the group each evening while his recorder keeps running.</div>` : ""}
+    <div class="note assumed"><span class="tag">ASSUMED · WEEK</span><br>
+      Graph stats from Jake's extracted week: 9 INFLUENCES hypotheses, 299 SAME_THREAD, 163 canonical
+      goals — recurring threads (party/BBQ, auction, schedule) seeded early resolve into the day-7 event.</div>`;
+  bindPairRows();
+}
+
+function showUser(w) {
+  const u = D.users[w];
+  const share = Math.round(100 * u.own_utterances / u.utterances_captured);
+  const heard = Object.entries(u.speakers_heard)
+    .filter(([n]) => n !== NAME[w]).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const rels = PAIRS.filter(p => p.w1 === w || p.w2 === w)
+    .sort((a,b) => METRICS[metric].get(b) - METRICS[metric].get(a));
+  const heardMax = heard.length ? heard[0][1] : 1;
+  $("#inspector").innerHTML = `
+    <h2 style="color:${COLOR[w]}">${NAME[w]} <span style="color:var(--dim);font-size:12px">${w}</span></h2>
+    <div class="meta">day 1 · active ${u.active_span_hours[0]}:00–${u.active_span_hours[1]}:00</div>
+    <div class="statgrid">
+      <div class="stat"><b>${u.utterances_captured.toLocaleString()}</b>captured</div>
+      <div class="stat"><b>${u.own_utterances.toLocaleString()}</b>own speech</div>
+      <div class="stat"><b>${share}%</b>self-share</div>
+    </div>
+    <h3>hourly activity</h3>
+    ${bar(u)}
+    <h3>voices heard (exposure)</h3>
+    ${hbars(heard)}
+    <h3>relationships — by ${METRICS[metric].label}</h3>
+    ${rels.map(p => {
+      const other = p.w1 === w ? p.w2 : p.w1;
+      const v = METRICS[metric].get(p);
+      return `<div class="pairrow" data-p="${p.key}">
+        <span style="color:${COLOR[other]}">⇄ ${NAME[other]}</span>
+        <span class="v">${METRICS[metric].fmt(v)}</span></div>`;
+    }).join("")}
+    <h3>trend notes</h3>
+    <ul class="tight">${NOTES[w].map(n => `<li>${n}</li>`).join("")}</ul>
+    <div class="note assumed"><span class="tag">ASSUMED · WEEK</span><br>${ASSUMED[w]}</div>
+    <button class="backbtn" onclick="resetView()">← back to group</button>`;
+  bindPairRows();
+}
+
+function showPair(p) {
+  const rTot = p.r12 + p.r21 || 1, hTot = p.heard12 + p.heard21 || 1;
+  const spanNote = p.span < 8
+    ? `<div class="note">Short overlap (${p.span}h, ending ~${p.last}) — shorter than the group's
+       ~10.9h typical span: one of the two left the shared space early.</div>` : "";
+  const rank = 1 + PAIRS.slice().sort((a,b)=>b.shared-a.shared).findIndex(x=>x.key===p.key);
+  $("#inspector").innerHTML = `
+    <h2><span style="color:${COLOR[p.w1]}">${NAME[p.w1]}</span> ⇄
+        <span style="color:${COLOR[p.w2]}">${NAME[p.w2]}</span></h2>
+    <div class="meta">pair detail · day 1 · co-presence rank #${rank} of 15</div>
+    <div class="statgrid">
+      <div class="stat"><b>${p.shared.toLocaleString()}</b>shared utterances</div>
+      <div class="stat"><b>${p.span}h</b>overlap ${p.first}–${p.last}</div>
+    </div>
+    <h3>replies — who responds to whom</h3>
+    <div class="hbar"><span class="nm">${NAME[p.w1]} → ${NAME[p.w2]}</span>
+      <span class="tr"><span class="fl" style="width:${Math.round(100*p.r12/rTot)}%"></span></span>
+      <span class="vl">${p.r12}</span></div>
+    <div class="hbar"><span class="nm">${NAME[p.w2]} → ${NAME[p.w1]}</span>
+      <span class="tr"><span class="fl own" style="width:${Math.round(100*p.r21/rTot)}%"></span></span>
+      <span class="vl">${p.r21}</span></div>
+    <h3>exposure — how much of the other's voice each captured</h3>
+    <div class="hbar"><span class="nm">${NAME[p.w1]} heard</span>
+      <span class="tr"><span class="fl green" style="width:${Math.round(100*p.heard12/hTot)}%"></span></span>
+      <span class="vl">${p.heard12}</span></div>
+    <div class="hbar"><span class="nm">${NAME[p.w2]} heard</span>
+      <span class="tr"><span class="fl green" style="width:${Math.round(100*p.heard21/hTot)}%"></span></span>
+      <span class="vl">${p.heard21}</span></div>
+    ${spanNote}
+    <div class="note">Reply counts are amplified ~3–4× because every nearby recorder captures the same
+      exchange — read the <i>ratio</i> between directions, not the absolute numbers.</div>
+    <button class="backbtn" onclick="resetView()">← back to group</button>`;
+}
+
+buildGraph();
+resetView();
+</script>
+</body>
+</html>
