@@ -39,12 +39,16 @@ SRT transcripts ──ingest──► utterances (all 6 wearers, en+zh, absolute
   `data/extracted/` so reruns are free.
 - `cde/embed.py` — OpenAI `text-embedding-3-small` when `OPENAI_API_KEY` is
   set, else hashed TF-IDF (2048-dim). English text only; zh kept for display.
-  Greedy cosine clustering resolves goal strings into canonical GOAL entities.
+  Goal strings are LLM-canonicalized into named recurring threads
+  ("plan and host the final-day party", "prepare for the dance performance").
 - `cde/link.py` — deterministic edges (SPOKE, PARTICIPATED_IN, EXPRESSES,
   PRECEDES, ADVANCES_GOAL, SIMILAR_TO*), scored candidate retrieval, LLM edge
-  judge. Validation: source must precede target; cited ids must exist;
-  INFLUENCES without self_report/transcript evidence → downgraded to
-  SAME_THREAD; NONE stored as rejected. *SIMILAR_TO is display-only, never causal.
+  judge (positional quote citation), plus `relate()`: binomial z-test
+  PERSON→PERSON INTERACTION_PATTERN edges ("X leads more often with Y than
+  without Y", per-day stats in `pair_behavior`). Validation: source must
+  precede target; cited quote indices must map to shown evidence; INFLUENCES
+  without cited evidence is kept but marked `[inferred]`; NONE stored as
+  rejected. *SIMILAR_TO is display-only, never causal.
 - `cde/patterns.py` — stretch: k-means event clusters, LLM-named PATTERN nodes.
 - `cde/api.py` + `web/index.html` — graph API + timeline UI with evidence
   inspector, "trace back" chain highlight, goal threads.
@@ -83,4 +87,8 @@ hop) · `GET /api/search?q=`
 
 PRECEDES thin grey · SIMILAR_TO dotted green ("semantic only") ·
 SAME_THREAD / REFERS_TO blue · INFLUENCES orange, width = confidence, dashed
-unless self-reported · rejected candidates red, hidden behind a toggle.
+unless self-reported · INTERACTION_PATTERN teal (people bar) · rejected
+candidates red, hidden behind a toggle.
+
+Endpoints: `GET /api/people` + `GET /api/person/{id}/patterns` serve the
+flagged interaction patterns with per-day counts and cited quotes.

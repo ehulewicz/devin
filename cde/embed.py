@@ -13,6 +13,7 @@ Usage: python -m cde.embed
 """
 import hashlib
 import json
+import sys
 import re
 
 import numpy as np
@@ -125,14 +126,23 @@ def event_text(ev, topics, people):
 
 GOAL_CLUSTER_PROMPT = """Below is a numbered list of goal statements extracted from one week of one person's lifelog. Group them into canonical objectives: merge statements that describe the same underlying goal even when phrased differently (e.g. "buy skewers for the BBQ", "get barbecue supplies", "order charcoal" -> "shop for the barbecue"). Keep genuinely distinct goals separate. Favor a handful of recurring threads (e.g. the final-day party/event planning) over hundreds of one-off micro-goals.
 
+Name each canonical goal as a SPECIFIC, RECOGNIZABLE thread of this person's week — e.g. "plan and host the final-day party", "bake the mango cream cake", "recoup shared expenses", "win the auctioned items". NEVER use generic category labels like "shopping", "social engagement", "task resolution", "food preparation" — always include the concrete object/outcome.
+
 GOALS:
 @@GOALS@@
 
 Reply with ONLY a JSON object: {"<canonical goal name>": [<indices into the list>]} — every index must appear exactly once."""
 
+BEHAVIOR_CLUSTER_PROMPT = """Below is a numbered list of observed behavior statements extracted from one week of one person's lifelog. Group them into canonical behavior categories: merge statements describing the same kind of interpersonal action even when phrased differently or targeting different specifics (e.g. "asks Tasha for help with the cable", "requests help fixing the app" -> "asking others for help"; "teases Shure about his hair", "jokes with the group" -> "teasing/joking"). Keep genuinely distinct behaviors separate. Prefer a compact set of recurring behavior kinds over hundreds of one-off actions.
 
-def cluster_goal_strings(items, thresh=0.82):
-    """Goal mention texts -> canonical GOAL entities.
+BEHAVIORS:
+@@GOALS@@
+
+Reply with ONLY a JSON object: {"<canonical behavior name>": [<indices into the list>]} — every index must appear exactly once."""
+
+
+def cluster_goal_strings(items, thresh=0.82, prompt=GOAL_CLUSTER_PROMPT):
+    """Mention texts -> canonical entity clusters.
     LLM canonicalization in batches (semantic merging beats cosine on varied
     phrasings); falls back to greedy cosine clustering if no LLM is available."""
     texts = [t for _, _, t in items]
@@ -143,9 +153,9 @@ def cluster_goal_strings(items, thresh=0.82):
         chunk = items[off : off + B]
         listing = "\n".join(f"{i}. {t}" for i, (_, _, t) in enumerate(chunk))
         try:
-            out = llm.chat_json(GOAL_CLUSTER_PROMPT.replace("@@GOALS@@", listing))
+            out = llm.chat_json(prompt.replace("@@GOALS@@", listing))
         except Exception as e:
-            print(f"goal cluster batch {off} LLM failed ({str(e)[:80]}); cosine fallback", flush=True)
+            print(f"cluster batch {off} LLM failed ({str(e)[:80]}); cosine fallback", flush=True)
             ok = False
             break
         if not isinstance(out, dict):
@@ -167,7 +177,7 @@ def cluster_goal_strings(items, thresh=0.82):
         names = [c[0] for c in clusters]
         listing = "\n".join(f"{i}. {n}" for i, n in enumerate(names))
         try:
-            out = llm.chat_json(GOAL_CLUSTER_PROMPT.replace("@@GOALS@@", listing))
+            out = llm.chat_json(prompt.replace("@@GOALS@@", listing))
             if isinstance(out, dict):
                 assigned = set()
                 merged = []
@@ -203,36 +213,38 @@ def cluster_goal_strings(items, thresh=0.82):
 
 
 def main():
+    goals_only = "--goals-only" in sys.argv
     con = db.connect()
     cur = con.cursor()
 
     # 1) event embeddings
     events = cur.execute("SELECT * FROM events ORDER BY id").fetchall()
-    topics = {}
-    for r in cur.execute(
-        "SELECT ee.event_id, e.canonical FROM event_entities ee "
-        "JOIN entities e ON e.id=ee.entity_id WHERE e.type='TOPIC'"
-    ):
-        topics.setdefault(r["event_id"], []).append(r["canonical"])
-    people = {}
-    for r in cur.execute(
-        "SELECT ep.event_id, e.canonical FROM event_participants ep "
-        "JOIN entities e ON e.id=ep.entity_id"
-    ):
-        people.setdefault(r["event_id"], []).append(r["canonical"])
-    texts = [event_text(ev, topics.get(ev["id"], []), people.get(ev["id"], [])) for ev in events]
-    oa = llm.embed(texts)
-    if oa is not None:
-        norms = np.linalg.norm(oa, axis=1, keepdims=True)
-        norms[norms == 0] = 1
-        vecs = [v / n for v, n in zip(oa, norms)]
-    else:
-        vecs, idf = tfidf_fit(texts)
-        _save_idf(con, idf)
-    for ev, v in zip(events, vecs):
-        cur.execute("UPDATE events SET embedding=? WHERE id=?", (blob(v), ev["id"]))
-    con.commit()
-    print(f"embedded {len(events)} events")
+    if not goals_only:
+        topics = {}
+        for r in cur.execute(
+            "SELECT ee.event_id, e.canonical FROM event_entities ee "
+            "JOIN entities e ON e.id=ee.entity_id WHERE e.type='TOPIC'"
+        ):
+            topics.setdefault(r["event_id"], []).append(r["canonical"])
+        people = {}
+        for r in cur.execute(
+            "SELECT ep.event_id, e.canonical FROM event_participants ep "
+            "JOIN entities e ON e.id=ep.entity_id"
+        ):
+            people.setdefault(r["event_id"], []).append(r["canonical"])
+        texts = [event_text(ev, topics.get(ev["id"], []), people.get(ev["id"], [])) for ev in events]
+        oa = llm.embed(texts)
+        if oa is not None:
+            norms = np.linalg.norm(oa, axis=1, keepdims=True)
+            norms[norms == 0] = 1
+            vecs = [v / n for v, n in zip(oa, norms)]
+        else:
+            vecs, idf = tfidf_fit(texts)
+            _save_idf(con, idf)
+        for ev, v in zip(events, vecs):
+            cur.execute("UPDATE events SET embedding=? WHERE id=?", (blob(v), ev["id"]))
+        con.commit()
+        print(f"embedded {len(events)} events")
 
     # 2) goal resolution: cluster GOAL mentions into canonical GOAL entities
     cur.execute("DELETE FROM event_entities WHERE relation='goal'")

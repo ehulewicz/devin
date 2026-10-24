@@ -9,15 +9,14 @@ pipeline doesn't use and the agreed priority for adding them.
 |---|---|
 | ingest | done — 300,940 utterances (Jake: 56,638 / 74 hour-files) |
 | extract | done — 74/74 cached files in `data/extracted/`, 655 events, ~2,930 mentions |
-| embed | done — OpenAI `text-embedding-3-small` (1,536-dim); goals LLM-canonicalized then merge-passed to 163 entities |
-| link | done — deterministic + 400 pairs judged by `gpt-4o-mini` with positional quote citation; verdicts cached in `data/judged.json` so reruns replay free |
+| embed | done — OpenAI `text-embedding-3-small` (1,536-dim); goals LLM-canonicalized to 270 specific threads ("plan and host the final-day party" 6d/42ev) |
+| link | done — deterministic + 800 pairs judged by `gpt-4o-mini` with positional quote citation; INTERACTION_PATTERN (person→person z-test) built; verdicts cached in `data/judged.json` |
 | patterns | done (stretch) — 12 named clusters + occurrences; PATTERN→PATTERN edges dropped (all pairs trivially "recur daily") |
 
-Edge counts: SPOKE 53,313 · EXPRESSES 3,014 · PARTICIPATED_IN 2,810 ·
-PRECEDES 648 · ADVANCES_GOAL 733 · SIMILAR_TO 249 · **INFLUENCES 9
-(hypothesis) · REFERS_TO 1 · SAME_THREAD 299 · rejected 91**.
-Grounding: 81/309 accepted judged edges carry cited utterance ids (26%);
-all 9 INFLUENCES have evidence.
+Edge counts: SPOKE 53,313 · EXPRESSES 2,808 · PARTICIPATED_IN 2,810 ·
+PRECEDES 648 · ADVANCES_GOAL 828 · SIMILAR_TO 249 · **INFLUENCES 22
+(hypothesis, loosened — inferred edges kept + marked) · REFERS_TO 6 ·
+SAME_THREAD 562 · INTERACTION_PATTERN 5 · rejected 210**.
 
 ## Blocking next step — none; pipeline is complete end-to-end
 

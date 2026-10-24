@@ -12,9 +12,9 @@ SRT transcripts ──ingest──► utterances (6 wearers, en+zh, absolute tim
                                │
    events · thoughts · emotions · goals · behaviors · causal_claims
                                │
-              embed + entity resolution (topics / goals / people)
+              embed + entity resolution (topics / goals / people / behaviors)
                                │
-    deterministic edges ──► scored candidates ──► LLM edge judge
+    deterministic edges + pair stats ──► scored candidates ──► LLM edge judge
                                │
                 SQLite graph ──► FastAPI ──► Cytoscape timeline UI
 ```
@@ -209,6 +209,51 @@ about cognition*, not facts; REFERS_TO/SAME_THREAD are `observed`. Accepted
 edges keep `confidence`, `rationale`, `alternatives_json`, `retrieval_score`,
 and `edge_evidence` rows for every cited utterance.
 
+### 4d. Person-person interaction patterns — `relate()`
+
+Directed PERSON→PERSON edges derived from expressed behaviors — "Jake
+teases/directs more with Tasha than average". No extra LLM extraction; the
+input is `mentions(type=BEHAVIOR)` + `event_participants`.
+
+**Behavior canonicalization.** BEHAVIOR mention texts are clustered the same
+way goals are (LLM grouping in batches, greedy-cosine fallback) into
+`entities(type=BEHAVIOR_KIND)`; each mention's `payload_json` gains a
+`behavior_entity_id`. Wiped and rebuilt on each run.
+
+**Pair stats.** For each event, the presence set is `event_participants` ∪
+{the subject's PERSON entity, behavior-mention speakers} (the wearer is
+always present; a speaker was present by definition). For every directed
+pair (speaker→other) and behavior kind b:
+
+- `shared` — events with both present
+- `behaved` — shared events where speaker expressed b
+- `rate` = behaved/shared · `p0` = speaker's b-rate in events where the
+  other was **absent**, Laplace-smoothed +1 (leave-one-out — a global
+  baseline structurally caps lift at ~1 for constant companions, which is
+  exactly backwards)
+- `z` = binomial z-score of `behaved` against `shared·p0` — "would this
+  count be surprising if the behavior were independent of them being there?"
+
+Flagged when `shared ≥ 4`, absent-events ≥ 3, `behaved ≥ 2`, and `z ≥ 1.0`
+(p≈0.16 — deliberately permissive; the demo prefers visible patterns over
+pruning, and every edge displays its raw counts). Pairs where the two are
+*always* together can't be evaluated — the absent-baseline doesn't exist —
+and are skipped. At most 4 edges per (speaker, other) pair, ranked by z.
+Per-day counts land in `pair_behavior` — the goal_state-equivalent temporal
+view ("conflict with X escalated days 4–5").
+
+**Edges.** One `INTERACTION_PATTERN` edge per flagged (speaker, other,
+behavior): directed PERSON→PERSON, `status='hypothesis'` (the counts are
+observed; the interpretation is a claim — same epistemics as INFLUENCES),
+`evidence_type='statistical'`, `retrieval_score`=z, `rationale` carrying
+the human-readable rate-vs-baseline (+lift for context), `edge_evidence`
+linking the supporting mentions' utterances. One edge per behavior kind
+keeps the pattern list readable.
+
+**Known bias:** `event_participants` only contains people the LLM named (§8),
+so pair rates skew toward explicit co-mentions. `heard_by` ingest would fix
+the denominator — this stage is where that fix pays off most.
+
 ---
 
 ## 5. Patterns (stretch) — `cde/patterns.py`
@@ -228,6 +273,8 @@ a hypothesis `REINFORCES` edge between patterns.
 | `GET /api/graph?subject=A1_JAKE&days=1-7&min_conf=` | `{nodes, edges}`: event nodes with absolute-time coords + mood, GOAL nodes with per-day states; event→event edges and ADVANCES_GOAL; rejected hidden unless `show_rejected` |
 | `GET /api/event/{id}` | summary, occurred_at vs recorded_at, participants, topics, goals, the full utterance evidence (en+zh), extracted mentions with cited ids, in/out edges with rationale + alternatives + evidence utterance ids |
 | `GET /api/goal/{id}/thread` | a goal's events and status timeline across days |
+| `GET /api/people` | PERSON entities with event counts + flagged pattern counts |
+| `GET /api/person/{id}/patterns` | INTERACTION_PATTERN edges in/out of one person: z-score, rationale, per-day `pair_behavior` rows with event ids, evidence quotes |
 | `GET /api/chain?event_id=` | backward traversal over INFLUENCES/REFERS_TO/SAME_THREAD (best-confidence predecessor per hop) to the earliest root; each hop carries its quotes — **the money shot** |
 | `GET /api/search?q=` | semantic search over event vectors |
 
@@ -314,7 +361,7 @@ integration cost), other-wearer extraction only if demo needs it.
 `utterances(wearer, file, day, t_abs, t_end, hms, speaker, text_en, text_zh)` ·
 `events(subject, day, t_start, t_end, occurred_at, recorded_at,
 time_uncertain, summary, mood, embedding)` · `event_utterances` ·
-`event_participants` · `entities(type[TOPIC|GOAL|PERSON], canonical,
+`event_participants` · `entities(type[TOPIC|GOAL|PERSON|BEHAVIOR_KIND], canonical,
 embedding)` + `entity_aliases` · `event_entities(relation)` ·
 `mentions(type[THOUGHT|EMOTION|GOAL|BEHAVIOR|CAUSAL_CLAIM], event_id, speaker,
 text, payload_json)` + `mention_evidence` ·
@@ -322,6 +369,8 @@ text, payload_json)` + `mention_evidence` ·
 status[observed|hypothesis|rejected], evidence_type, rationale,
 alternatives_json, retrieval_score)` + `edge_evidence` ·
 `goal_state(goal_entity_id, day, status, event_id)` ·
+`pair_behavior(src_entity_id, dst_entity_id, behavior_entity_id, day,
+shared, behaved, events_json)` ·
 `patterns` + `pattern_occurrences` (stretch) · `meta` (persisted TF-IDF idf).
 
 ## Run order
@@ -343,5 +392,7 @@ uvicorn cde.api:app --port 8000 # http://127.0.0.1:8000
 - Every extracted item cites ≥1 real utterance id or is dropped.
 - No CAUSES edges: causal relations exist only as `INFLUENCES` *hypotheses*
   with evidence, confidence, and recorded alternatives.
+- INTERACTION_PATTERN edges are `hypothesis` too: the underlying counts are
+  observed statistics, but "behaves differently with X" is an interpretation.
 - SIMILAR_TO is display-only and labelled "semantic only" — the demo's point is
   that the interesting edges are the judged, evidence-backed ones.

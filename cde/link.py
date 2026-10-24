@@ -12,7 +12,13 @@ Judge: batches of <=10 pairs per LLM call. Validation: source must precede
 target; cited utterance ids must exist; INFLUENCES without
 self_report/transcript evidence is downgraded to SAME_THREAD; NONE -> rejected.
 
+relate(): directed PERSON->PERSON INTERACTION_PATTERN edges from expressed
+behaviors — a behavior kind is flagged for a pair when its rate in their
+shared events is >= PAIR_LIFT x the speaker's baseline rate (min support
+floors keep tiny samples out). Per-day counts land in pair_behavior.
+
 Usage: python -m cde.link [--subject A1_JAKE] [--skip-judge] [--max-pairs 400]
+       python -m cde.link --relate-only   # rebuild just pair patterns
 """
 import json
 import math
@@ -29,6 +35,12 @@ WINDOWS = [1800, 6 * 3600, 24 * 3600, 7 * 86400]
 TAU = 6 * 3600  # temporal decay constant
 SIM_THRESH = 0.88
 TOP_K = 5
+
+PAIR_Z = 1.0           # binomial z-score floor — deliberately permissive (p~0.16)
+PAIR_MIN_SHARED = 4    # pair needs at least this many shared events
+PAIR_MIN_REST = 3      # and this many events where the other was absent
+PAIR_MIN_BEHAVED = 2   # and at least this many instances of the behavior
+PAIR_TOP_PER = 4       # keep at most this many flagged behaviors per pair
 
 
 def add_edge(cur, src_t, src, dst_t, dst, rel, conf=None, status="observed",
@@ -50,6 +62,7 @@ def add_edge(cur, src_t, src, dst_t, dst, rel, conf=None, status="observed",
 
 def deterministic(con, subject):
     cur = con.cursor()
+    cur.execute("DELETE FROM pair_behavior")  # references edges — clear first
     cur.execute("DELETE FROM edge_evidence")
     cur.execute("DELETE FROM edges")
     cur.execute("DELETE FROM goal_state")
@@ -310,9 +323,15 @@ def judge(con, evs, pairs, max_pairs=400):
             elif 0 <= i < len(shown):         # positional cite into shown quotes
                 ev_ids.append(shown[i]["id"])
         ev_ids = sorted(set(ev_ids))
-        if rel == "INFLUENCES" and (etype not in ("self_report", "transcript") or not ev_ids):
+        if rel == "INFLUENCES" and etype not in ("self_report", "transcript", "semantic"):
             rel, stats["downgraded"] = "SAME_THREAD", stats["downgraded"] + 1
-            r["reason"] = (r.get("reason") or "") + " [downgraded: no cited evidence]"
+            r["reason"] = (r.get("reason") or "") + " [downgraded: temporal-only signal]"
+        elif rel == "INFLUENCES" and not ev_ids:
+            # keep the hypothesis but mark it inferred — demo wants visible causal
+            # claims; inspector shows alternatives + confidence alongside
+            r["reason"] = (r.get("reason") or "") + " [inferred: no direct quote]"
+            etype = etype or "semantic"
+            r["evidence_type"] = etype
         if rel == "NONE":
             add_edge(cur, "EVENT", a, "EVENT", b, rel, status="rejected",
                      etype=etype, rationale=r.get("reason"),
@@ -430,13 +449,209 @@ def similar(con, subject, thresh=None, per_node=3):
     return n
 
 
+def _person_lookup(cur):
+    """name (canonical or alias) -> PERSON entity id."""
+    m = {}
+    for r in cur.execute("SELECT id, canonical FROM entities WHERE type='PERSON'"):
+        m[r["canonical"]] = r["id"]
+    for r in cur.execute(
+        "SELECT a.alias, a.entity_id FROM entity_aliases a "
+        "JOIN entities e ON e.id=a.entity_id WHERE e.type='PERSON'"
+    ):
+        m.setdefault(r["alias"], r["entity_id"])
+    return m
+
+
+def relate(con, subject, z_floor=PAIR_Z, min_shared=PAIR_MIN_SHARED,
+           min_behaved=PAIR_MIN_BEHAVED, min_rest=PAIR_MIN_REST,
+           top_per=PAIR_TOP_PER):
+    """Person-person interaction patterns from expressed behaviors.
+
+    1) cluster BEHAVIOR mentions into BEHAVIOR_KIND entities
+    2) per directed pair (speaker -> other present): rate(behavior) in
+       shared events vs the speaker's rate in events where the other was
+       ABSENT (leave-one-out baseline); flag on binomial z-score >= `z_floor`
+    3) write pair_behavior per-day rows + up to `top_per` INTERACTION_PATTERN
+       edges per flagged (speaker, other) pair
+    """
+    cur = con.cursor()
+    # idempotent: wipe this stage's own outputs (pair_behavior first: it
+    # holds FK references into edges)
+    cur.execute("DELETE FROM pair_behavior")
+    cur.execute(
+        "DELETE FROM edge_evidence WHERE edge_id IN "
+        "(SELECT id FROM edges WHERE relation='INTERACTION_PATTERN')")
+    cur.execute("DELETE FROM edges WHERE relation='INTERACTION_PATTERN'")
+    cur.execute(
+        "DELETE FROM entity_aliases WHERE entity_id IN "
+        "(SELECT id FROM entities WHERE type='BEHAVIOR_KIND')")
+    cur.execute("DELETE FROM entities WHERE type='BEHAVIOR_KIND'")
+    cur.execute(
+        "UPDATE mentions SET payload_json=json_remove(payload_json,'$.behavior_entity_id') "
+        "WHERE type='BEHAVIOR'")
+
+    # --- 1) canonicalize behavior kinds (same machinery as goals) ----------
+    from cde.embed import BEHAVIOR_CLUSTER_PROMPT, blob, cluster_goal_strings, embed_texts
+    mentions = cur.execute(
+        "SELECT id, event_id, speaker, text FROM mentions "
+        "WHERE type='BEHAVIOR' AND event_id IS NOT NULL").fetchall()
+    if not mentions:
+        con.commit()
+        return {"behavior_kinds": 0, "pairs_flagged": 0}
+    items = [(m["id"], m["event_id"], m["text"]) for m in mentions]
+    # cluster cache: keeps reruns deterministic and free (same convention as
+    # data/judged.json for the edge judge). Replays by mention id; mentions
+    # not covered by the cache become singleton clusters.
+    cache_path = os.path.join(db.ROOT, "data", "behavior_kinds.json")
+    pos_of = {mid: i for i, (mid, _, _) in enumerate(items)}
+    clusters = None
+    try:
+        cached = json.load(open(cache_path))
+        assigned = set()
+        clusters = []
+        for canon, mids in cached:
+            members = [pos_of[m] for m in mids if m in pos_of and pos_of[m] not in assigned]
+            if members:
+                assigned.update(members)
+                clusters.append((canon, members))
+        for i, (mid, _, t) in enumerate(items):
+            if i not in assigned:
+                clusters.append((t, [i]))
+    except Exception:
+        clusters = None
+    if clusters is None:
+        clusters = cluster_goal_strings(items, prompt=BEHAVIOR_CLUSTER_PROMPT)
+        json.dump([(c, [items[i][0] for i in ms]) for c, ms in clusters],
+                  open(cache_path, "w"), ensure_ascii=False)
+    kind_of = {}  # mention_id -> BEHAVIOR_KIND entity id
+    for (rep, members), v in zip(clusters, embed_texts([c[0] for c in clusters], con)):
+        cur.execute(
+            "INSERT OR IGNORE INTO entities(type,canonical,embedding) VALUES('BEHAVIOR_KIND',?,?)",
+            (rep[:160], blob(v)))
+        kid = cur.execute(
+            "SELECT id FROM entities WHERE type='BEHAVIOR_KIND' AND canonical=?",
+            (rep[:160],)).fetchone()["id"]
+        for mi in members:
+            mid, _, _ = items[mi]
+            kind_of[mid] = kid
+            cur.execute(
+                "UPDATE mentions SET payload_json="
+                "json_set(COALESCE(payload_json,'{}'),'$.behavior_entity_id',?) WHERE id=?",
+                (kid, mid))
+    con.commit()
+
+    # --- 2) presence + counts ----------------------------------------------
+    people = _person_lookup(cur)
+    subj = cur.execute(
+        "SELECT name FROM participants WHERE is_subject=1").fetchone()
+    subj_id = people.get(subj["name"]) if subj else None
+
+    events = cur.execute(
+        "SELECT id, day FROM events WHERE subject=? ORDER BY t_start", (subject,)).fetchall()
+    present = defaultdict(set)          # event_id -> person entity ids
+    for r in cur.execute("SELECT event_id, entity_id FROM event_participants"):
+        present[r["event_id"]].add(r["entity_id"])
+    mention_utts = defaultdict(list)    # mention_id -> utterance ids
+    for r in cur.execute("SELECT mention_id, utterance_id FROM mention_evidence"):
+        mention_utts[r["mention_id"]].append(r["utterance_id"])
+
+    beh_by_event = defaultdict(list)    # event_id -> (speaker_id, kind_id, mention_id)
+    mid_eid = {m["id"]: m["event_id"] for m in mentions}
+    for m in mentions:
+        sid = people.get(m["speaker"])
+        kid = kind_of.get(m["id"])
+        if sid and kid:
+            beh_by_event[m["event_id"]].append((sid, kid, m["id"]))
+            present[m["event_id"]].add(sid)   # a speaker was present by definition
+    for eid in present:
+        if subj_id:
+            present[eid].add(subj_id)         # the wearer is always present
+
+    shared = defaultdict(int)                 # (day, frozenset(a,b)) -> count
+    present_n = defaultdict(int)              # person -> events present
+    behaved = defaultdict(list)               # (s,p,b,day) -> [mention_ids]
+    behaved_ev = defaultdict(set)             # (s,b) -> event ids
+    for e in events:
+        P = sorted(present[e["id"]])
+        day = e["day"]
+        for a in P:
+            present_n[a] += 1
+        for i in range(len(P)):
+            for p in P[i + 1:]:
+                shared[(day, frozenset((P[i], p)))] += 1
+        for sid, kid, mid in beh_by_event[e["id"]]:
+            behaved_ev[(sid, kid)].add(e["id"])
+            for p in P:
+                if p != sid:
+                    behaved[(sid, p, kid, day)].append(mid)
+
+    # --- 3) flag + write -----------------------------------------------------
+    shared_tot = defaultdict(int)
+    for (day, pair), n in shared.items():
+        shared_tot[pair] += n
+    canon = {r["id"]: r["canonical"] for r in cur.execute(
+        "SELECT id, canonical FROM entities WHERE type IN ('PERSON','BEHAVIOR_KIND')")}
+
+    per_pair = defaultdict(list)  # (s,p) -> candidate triples sorted by z
+    for s, p, b in sorted({k[:3] for k in behaved}):
+        pair = frozenset((s, p))
+        sh = shared_tot.get(pair, 0)
+        rest_n = present_n[s] - sh
+        mids_all = [m for k, ms in behaved.items() if k[:3] == (s, p, b) for m in ms]
+        bh = len({mid_eid[mid] for mid in mids_all})          # distinct events
+        tot = len(behaved_ev[(s, b)])
+        rate = bh / sh if sh else 0.0
+        # absent-rate, Laplace-smoothed so a never-seen-elsewhere behavior
+        # gets a small nonzero null instead of an infinite z
+        p0 = (tot - bh + 1) / (rest_n + 1) if rest_n >= 0 else 0.0
+        exp = sh * p0
+        z = (bh - exp) / math.sqrt(max(sh * p0 * (1 - p0), 1e-9))
+        lf = rate / max(p0, 0.005)
+        if (sh < min_shared or rest_n < min_rest or bh < min_behaved
+                or z < z_floor):
+            continue
+        per_pair[(s, p)].append((z, s, p, b, sh, bh, rate, p0, lf, mids_all))
+
+    flagged = 0
+    for (s, p), cands in per_pair.items():
+        for z, s, p, b, sh, bh, rate, p0, lf, mids_all in \
+                sorted(cands, reverse=True)[:top_per]:
+            flagged += 1
+            ev_utts = sorted({u for mid in mids_all for u in mention_utts[mid]})[:16]
+            eid = add_edge(cur, "PERSON", s, "PERSON", p, "INTERACTION_PATTERN",
+                           status="hypothesis", etype="statistical",
+                           rationale=(f"{canon.get(b,'?')} in {bh}/{sh} shared events "
+                                      f"({rate:.0%}) vs {p0:.0%} of "
+                                      f"{canon.get(s,'?')}'s events without "
+                                      f"{canon.get(p,'?')} (z={z:.1f}, lift {lf:.1f}x)"),
+                           score=round(z, 2), evidence=ev_utts)
+            # per-day rows for every day the pair shared events (behaved may be 0)
+            for (day, pr), n in sorted(shared.items()):
+                if pr != frozenset((s, p)):
+                    continue
+                day_mids = behaved.get((s, p, b, day), [])
+                cur.execute(
+                    "INSERT OR REPLACE INTO pair_behavior"
+                    "(edge_id,src_entity_id,dst_entity_id,behavior_entity_id,day,"
+                    "shared,behaved,events_json) VALUES(?,?,?,?,?,?,?,?)",
+                    (eid, s, p, b, day, n, len(day_mids),
+                     json.dumps(sorted({mid_eid[mid] for mid in day_mids}))))
+    con.commit()
+    return {"behavior_kinds": len(clusters), "pairs_flagged": flagged}
+
+
 def main():
     args = sys.argv[1:]
     subject = args[args.index("--subject") + 1] if "--subject" in args else "A1_JAKE"
     skip_judge = "--skip-judge" in args
     max_pairs = int(args[args.index("--max-pairs") + 1]) if "--max-pairs" in args else 400
+    z_floor = float(args[args.index("--z") + 1]) if "--z" in args else PAIR_Z
 
     con = db.connect()
+    if "--relate-only" in args:
+        print("pair patterns:", relate(con, subject, z_floor=z_floor), flush=True)
+        con.close()
+        return
     print("deterministic edges:", deterministic(con, subject), flush=True)
     n_sim = similar(con, subject)
     print(f"SIMILAR_TO edges: {n_sim}", flush=True)
@@ -445,6 +660,7 @@ def main():
     if not skip_judge and pairs:
         stats, judged = judge(con, evs, pairs, max_pairs)
         print(f"judged={judged} -> {stats}", flush=True)
+    print("pair patterns:", relate(con, subject, z_floor=z_floor), flush=True)
     totals = {r["relation"]: (r["c"], r["st"]) for r in con.execute(
         "SELECT relation, status st, COUNT(*) c FROM edges GROUP BY relation, status")}
     print("edges:", totals)

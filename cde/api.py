@@ -175,6 +175,63 @@ def event(eid: int):
             "mentions": mentions, "edges_out": out_edges, "edges_in": in_edges}
 
 
+@app.get("/api/people")
+def people(subject: str = "A1_JAKE"):
+    """Person entities with event counts + flagged pattern counts."""
+    c = con()
+    rows = c.execute(
+        """SELECT e.id, e.canonical,
+                  (SELECT COUNT(*) FROM event_participants ep
+                   WHERE ep.entity_id=e.id) n_events,
+                  (SELECT COUNT(*) FROM edges x WHERE x.relation='INTERACTION_PATTERN'
+                   AND x.status!='rejected' AND x.src_type='PERSON' AND x.src_id=e.id) out_p,
+                  (SELECT COUNT(*) FROM edges x WHERE x.relation='INTERACTION_PATTERN'
+                   AND x.status!='rejected' AND x.dst_type='PERSON' AND x.dst_id=e.id) in_p
+           FROM entities e WHERE e.type='PERSON' ORDER BY n_events DESC""",
+    ).fetchall()
+    c.close()
+    return [{"id": r["id"], "name": r["canonical"], "events": r["n_events"],
+             "patterns_out": r["out_p"], "patterns_in": r["in_p"]} for r in rows]
+
+
+@app.get("/api/person/{pid}/patterns")
+def person_patterns(pid: int):
+    """Flagged INTERACTION_PATTERN edges in/out of one person, with per-day stats."""
+    c = con()
+    p = c.execute("SELECT id, canonical FROM entities WHERE id=? AND type='PERSON'",
+                  (pid,)).fetchone()
+    if not p:
+        return {"error": "not found"}
+    names = {r["id"]: r["canonical"] for r in c.execute(
+        "SELECT id, canonical FROM entities")}
+    out = []
+    for r in c.execute(
+        """SELECT * FROM edges WHERE relation='INTERACTION_PATTERN'
+           AND status!='rejected' AND src_type='PERSON' AND dst_type='PERSON'
+           AND (src_id=? OR dst_id=?) ORDER BY retrieval_score DESC""",
+        (pid, pid),
+    ):
+        days = [{"day": d["day"], "shared": d["shared"], "behaved": d["behaved"],
+                 "events": json.loads(d["events_json"] or "[]")}
+                for d in c.execute(
+                    "SELECT day, shared, behaved, events_json FROM pair_behavior "
+                    "WHERE edge_id=? ORDER BY day", (r["id"],))]
+        ev_ids = [u["utterance_id"] for u in c.execute(
+            "SELECT utterance_id FROM edge_evidence WHERE edge_id=?", (r["id"],))]
+        quotes = [dict(u) for u in c.execute(
+            "SELECT id, hms, speaker, text_en, text_zh FROM utterances "
+            f"WHERE id IN ({','.join('?'*len(ev_ids))}) ORDER BY t_abs", ev_ids)] if ev_ids else []
+        out.append({
+            "edge_id": r["id"], "direction": "out" if r["src_id"] == pid else "in",
+            "other": names.get(r["dst_id"] if r["src_id"] == pid else r["src_id"]),
+            "other_id": r["dst_id"] if r["src_id"] == pid else r["src_id"],
+            "status": r["status"], "evidence_type": r["evidence_type"],
+            "z": r["retrieval_score"], "rationale": r["rationale"],
+            "days": days, "quotes": quotes})
+    c.close()
+    return {"id": pid, "name": p["canonical"], "patterns": out}
+
+
 @app.get("/api/goal/{gid}/thread")
 def goal_thread(gid: int):
     c = con()

@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS event_participants(
 
 CREATE TABLE IF NOT EXISTS entities(
     id INTEGER PRIMARY KEY,
-    type TEXT,                        -- TOPIC | GOAL | PERSON
+    type TEXT,                        -- TOPIC | GOAL | PERSON | BEHAVIOR_KIND
     canonical TEXT,
     embedding BLOB,
     UNIQUE(type, canonical)
@@ -108,9 +108,10 @@ CREATE TABLE IF NOT EXISTS edges(
     dst_id INTEGER,
     relation TEXT,                    -- SPOKE PARTICIPATED_IN EXPRESSES PRECEDES REFERS_TO
                                       -- SIMILAR_TO SAME_THREAD ADVANCES_GOAL INFLUENCES
+                                      -- INTERACTION_PATTERN
     confidence REAL,
     status TEXT,                      -- observed | hypothesis | rejected
-    evidence_type TEXT,               -- self_report | transcript | temporal | semantic | extraction
+    evidence_type TEXT,               -- self_report | transcript | temporal | semantic | extraction | statistical
     rationale TEXT,
     alternatives_json TEXT,
     retrieval_score REAL
@@ -131,6 +132,18 @@ CREATE TABLE IF NOT EXISTS goal_state(
     status TEXT,                      -- open | in-progress | done
     event_id INTEGER REFERENCES events(id),
     PRIMARY KEY(goal_entity_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS pair_behavior(
+    edge_id INTEGER REFERENCES edges(id),
+    src_entity_id INTEGER REFERENCES entities(id),   -- person expressing the behavior
+    dst_entity_id INTEGER REFERENCES entities(id),   -- other person present
+    behavior_entity_id INTEGER REFERENCES entities(id),
+    day INTEGER,
+    shared INTEGER,                   -- events with both present that day
+    behaved INTEGER,                  -- of those, events where src expressed the behavior
+    events_json TEXT,                 -- event ids contributing to `behaved`
+    PRIMARY KEY(src_entity_id, dst_entity_id, behavior_entity_id, day)
 );
 
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v BLOB);

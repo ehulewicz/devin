@@ -38,9 +38,15 @@
   #tracebtn { width:100%; margin-top:10px; padding:7px; background:var(--accent); color:#0d1117; border:none; border-radius:6px; font-weight:700; cursor:pointer; font-size:13px; }
   #legend { position:absolute; left:12px; bottom:12px; background:rgba(22,27,34,.94); border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-size:11px; z-index:10; max-width:300px; }
   #legend .sw { display:inline-block; width:26px; height:0; border-top:3px solid; margin:0 6px 2px 0; vertical-align:middle; }
-  #goalbar { display:flex; gap:6px; overflow-x:auto; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--border); font-size:12px; }
-  .goalchip { background:#21262d; border:1px solid var(--border); border-radius:14px; padding:2px 10px; cursor:pointer; white-space:nowrap; }
+  #goalbar, #peoplebar { display:flex; gap:6px; overflow-x:auto; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--border); font-size:12px; }
+  .goalchip, .personchip { background:#21262d; border:1px solid var(--border); border-radius:14px; padding:2px 10px; cursor:pointer; white-space:nowrap; }
   .goalchip:hover { border-color:var(--accent); }
+  .personchip:hover { border-color:#39c5cf; }
+  .personchip .pn { color:#39c5cf; font-size:10px; margin-left:4px; }
+  .dayrow { color:var(--dim); font-size:11px; margin-top:3px; }
+  .dayrow b { color:var(--fg); font-weight:500; }
+  .evlink { color:var(--blue); cursor:pointer; margin-right:5px; }
+  .evlink:hover { text-decoration:underline; }
   .chainhop { border-left:3px solid var(--accent); padding:4px 8px; margin:8px 0; font-size:12px; background:#1c2128; border-radius:0 6px 6px 0; }
   .chainhop .r { color:var(--accent); font-weight:700; }
   .chainhop .q { color:var(--dim); margin-top:2px; }
@@ -69,6 +75,7 @@
   <input id="search" placeholder="semantic search…">
 </header>
 <div id="goalbar"></div>
+<div id="peoplebar"></div>
 <main>
   <div id="cy"></div>
   <div id="inspector"><p style="color:var(--dim)">Click a node to inspect its evidence.</p></div>
@@ -81,7 +88,8 @@
   <span class="sw" style="border-color:#f0883e"></span>INFLUENCES (hypothesis, width=confidence)<br>
   <span class="sw" style="border-color:#3fb950;border-top-style:dotted"></span>SIMILAR_TO — semantic only<br>
   <span class="sw" style="border-color:#f85149;border-top-style:dashed"></span>rejected candidate<br>
-  <span class="sw" style="border-color:#bc8cff"></span>ADVANCES_GOAL
+  <span class="sw" style="border-color:#bc8cff"></span>ADVANCES_GOAL<br>
+  <span class="sw" style="border-color:#39c5cf"></span>INTERACTION_PATTERN (people bar)
 </div>
 <script>
 const $ = s => document.querySelector(s);
@@ -306,6 +314,56 @@ async function loadGoalBar() {
   bar.querySelectorAll(".goalchip").forEach(c => c.onclick = () => showGoal(c.dataset.g));
 }
 
+// ---------- people / interaction patterns ----------
+async function loadPeopleBar() {
+  const people = await api("/api/people");
+  const bar = $("#peoplebar");
+  bar.innerHTML = people.length
+    ? "<b style='color:var(--dim)'>people:</b> " + people.map(p =>
+        `<span class="personchip" data-p="${p.id}">${p.name}` +
+        (p.patterns_out + p.patterns_in
+          ? `<span class="pn">${p.patterns_out + p.patterns_in}</span>` : "") +
+        `</span>`).join("")
+    : "";
+  bar.querySelectorAll(".personchip").forEach(c =>
+    c.onclick = () => showPerson(+c.dataset.p));
+}
+
+async function showPerson(pid) {
+  const d = await api(`/api/person/${pid}/patterns`);
+  const insp = $("#inspector");
+  const card = p => {
+    const arrow = p.direction === "out" ? `${d.name} → ${p.other}` : `${p.other} → ${d.name}`;
+    const days = p.days.map(x =>
+      `<b>D${x.day}</b> ${x.behaved}/${x.shared}` +
+      (x.events.length ? " " + x.events.map(ev =>
+        `<span class="evlink" data-node="e${ev}">e${ev}</span>`).join("") : "")).join(" · ");
+    const quotes = p.quotes.slice(0, 8).map(q =>
+      `<div class="utt"><b>${q.hms} ${q.speaker}</b>: ${q.text_en || q.text_zh || ""}</div>`).join("");
+    return `<div class="edgecard">
+      <span class="rel" style="color:#39c5cf">${arrow}</span>
+      <span style="color:var(--dim)"> ${p.status} · ${p.evidence_type} · z=${p.z}</span>
+      <div class="rat">${p.rationale}</div>
+      <div class="dayrow">${days}</div>
+      ${quotes ? `<div style="margin-top:4px">${quotes}</div>` : ""}
+    </div>`;
+  };
+  const outs = d.patterns.filter(p => p.direction === "out");
+  const ins = d.patterns.filter(p => p.direction === "in");
+  insp.innerHTML = `<h2 style="color:#39c5cf">◉ ${d.name}</h2>
+    <div class="meta">person · ${d.patterns.length} flagged interaction patterns
+      (behaviors ≥25% above their baseline rate)</div>
+    <h3>toward others (${outs.length})</h3>${outs.map(card).join("") || "—"}
+    <h3>from others (${ins.length})</h3>${ins.map(card).join("") || "—"}`;
+  insp.querySelectorAll(".evlink").forEach(a => a.onclick = () => {
+    const id = a.dataset.node;
+    const n = cy.getElementById(id);
+    if (n.nonempty()) cy.animate({center: {eles: n}, zoom: cy.zoom()}, {duration: 300});
+    inspect(id.slice(1));
+  });
+}
+// ---------- /people ----------
+
 // ---------- replay mode ----------
 let rp = null;  // {timer, simT, nodes, pendingEdges, parent(comp), compEdges, speed}
 const HOUR_MS = 1200;          // 1 sim-hour per 1.2s at speed 1
@@ -468,6 +526,7 @@ window.inspect = inspect;
 dayButtons();
 loadStats();
 loadGraph();
+loadPeopleBar();
 </script>
 </body>
 </html>
