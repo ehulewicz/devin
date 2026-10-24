@@ -193,6 +193,7 @@ def main():
         sys.path.insert(0, ROOT)
         try:
             from cde import audio
+            used_vad = False      # set only when ffmpeg actually analysed real media
             for w in WEARERS:
                 own = NAME[w]
                 by_file = defaultdict(list)
@@ -202,11 +203,12 @@ def main():
                 for fname, rows in by_file.items():
                     media = audio.media_for_file(fname)
                     foff = audio.file_offset_seconds(fname)
-                    if not media or foff is None:
+                    if not media or foff is None or not audio.ffmpeg():
                         precise += sum(max(0.0, r["e"] - r["t"]) for r in rows
                                        if r["speaker"] == own)
                         continue
                     sil = audio.silence_spans(media)
+                    used_vad = True
                     for r in rows:
                         if r["speaker"] != own:
                             continue
@@ -216,9 +218,10 @@ def main():
                         precise += max(0.0, (t1 - t0) - gap)
                 if precise:
                     users[w]["voiced_s"] = round(precise)
-                    audio_vad = True
-                    print(f"  {w}: voiced_s refined by VAD -> {users[w]['voiced_s']}s",
-                          flush=True)
+                    print(f"  {w}: voiced_s -> {users[w]['voiced_s']}s", flush=True)
+            audio_vad = used_vad
+            if used_vad:
+                print("  voiced_s marked VAD-refined", flush=True)
         except Exception as e:
             print(f"--audio VAD unavailable ({e}); using transcript durations",
                   flush=True)
