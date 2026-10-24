@@ -109,11 +109,15 @@ function pairMetrics(wa, wb) {
   const w1 = CODE2W[c1], w2 = CODE2W[c2];
   const heard12 = (D.users[w1].speakers_heard[NAME[w2]] || 0);
   const heard21 = (D.users[w2].speakers_heard[NAME[w1]] || 0);
+  const ex = (D.pair_extras || {})[k] || {};
   return { key: k, w1, w2,
            shared: cp.shared_utterances || 0, span: cp.span_hours || 0,
            first: cp.first, last: cp.last,
            r12: rp.f || 0, r21: rp.b || 0,
            heard12, heard21,
+           lat1: ex.lat_f, lat2: ex.lat_b,          // reply latency, each member
+           ov1: ex.ov_f || 0, ov2: ex.ov_b || 0,    // talk-overs committed
+           n1: ex.n_f || 0, n2: ex.n_b || 0,        // clean replies (denominator)
            replies: (rp.f || 0) + (rp.b || 0),
            exposure: heard12 + heard21 };
 }
@@ -137,8 +141,8 @@ const NOTES = {
     "Latest night of anyone (recording to 22:05); loud morning block 11–13, evening resume 17–20.",
     "Most-captured other voice in all five transcripts — in Alice's and Tasha's files he's heard more than they hear themselves."],
   A2_ALICE: [
-    "Quiet center: highest co-presence totals overall but lowest self-share (19%) — always present, rarely heard.",
-    "Strongest pair bond in the dataset is Alice–Tasha (2,143 shared utterances / 9.5h).",
+    "Quiet center: highest co-presence totals overall but lowest self-share (19%) and least airtime (~43 min) — always present, rarely heard.",
+    "Strongest pair bond in the dataset is Alice–Tasha (2,143 shared utterances / 9.5h) — and the most patient: 25–27% talk-over rate vs ~40% group norm.",
     "Co-presence edges credit her correctly where extraction would miss her — argues for heard_by/WITNESSED edges."],
   A3_TASHA: [
     "Connector: bridges Alice, Lucia, Katrina; mid-to-high engagement with everyone.",
@@ -155,6 +159,7 @@ const NOTES = {
   A6_SHURE: [
     "Semi-detached evenings: co-presence with every wearer ends ~18:37 while his recorder runs to 22:09.",
     "17:00 spike is the largest single hour anywhere (2,144 captured — a big group moment).",
+    "Holds the floor longest: 42-utterance monologue streak, the group's max.",
     "Only file containing 'Shure's GF' (382) and 'Sister' (57) — a private social thread outside the group."],
 };
 const ASSUMED = {
@@ -308,6 +313,8 @@ function groupRhythm() {
 function showOverview() {
   const sorted = PAIRS.slice().sort((a,b)=>b.shared-a.shared);
   const best = sorted[0], early = sorted.filter(p => p.span < 8);
+  const talkiest = WEARERS.slice().sort((a,b) => userOvRate(b) - userOvRate(a))[0];
+  const mostVoiced = WEARERS.slice().sort((a,b) => D.users[b].voiced_s - D.users[a].voiced_s)[0];
   $("#inspector").innerHTML = `
     <h2>Group overview — day 1</h2>
     <div class="meta">6 wearers · ${Object.values(D.users).reduce((s,u)=>s+u.utterances_captured,0).toLocaleString()}
@@ -319,9 +326,15 @@ function showOverview() {
     <h3>pairs by ${METRICS[metric].label}</h3>
     ${pairTable()}
     <div class="note">Strongest bond: <b>${NAME[best.w1]} ⇄ ${NAME[best.w2]}</b>
-      (${best.shared.toLocaleString()} shared utterances / ${best.span}h).</div>
+      (${best.shared.toLocaleString()} shared utterances / ${best.span}h) — also the
+      most patient dyad: ${Math.round(100*ovRate(best.ov1,best.n1))}%/${Math.round(100*ovRate(best.ov2,best.n2))}%
+      talk-over rate vs ~40% group norm.</div>
     ${early.length ? `<div class="note">Every Shure pair caps at ~7.5h and ends ~18:37 — he splits off
       from the group each evening while his recorder keeps running.</div>` : ""}
+    <div class="note"><b>${NAME[mostVoiced]}</b> holds the most airtime
+      (${Math.round(D.users[mostVoiced].voiced_s/60)} min) ·
+      <b>${NAME[talkiest]}</b> talks over others most
+      (${Math.round(100*userOvRate(talkiest))}% of exchanges).</div>
     <div class="note assumed"><span class="tag">ASSUMED · WEEK</span><br>
       Graph stats from Jake's extracted week: 9 INFLUENCES hypotheses, 299 SAME_THREAD, 163 canonical
       goals — recurring threads (party/BBQ, auction, schedule) seeded early resolve into the day-7 event.</div>`;
@@ -343,6 +356,9 @@ function showUser(w) {
       <div class="stat"><b>${u.utterances_captured.toLocaleString()}</b>captured</div>
       <div class="stat"><b>${u.own_utterances.toLocaleString()}</b>own speech</div>
       <div class="stat"><b>${share}%</b>self-share</div>
+      <div class="stat"><b>${Math.round(u.voiced_s/60)}m</b>airtime${D.audio_vad ? " (VAD)" : ""}</div>
+      <div class="stat"><b>${u.monologue_max}</b>longest streak</div>
+      <div class="stat"><b>${Math.round(100*userOvRate(w))}%</b>talk-over rate</div>
     </div>
     <h3>hourly activity</h3>
     ${bar(u)}
@@ -362,6 +378,16 @@ function showUser(w) {
     <button class="backbtn" onclick="resetView()">← back to group</button>`;
   bindPairRows();
 }
+
+const ovRate = (ov, n) => n + ov ? ov / (n + ov) : 0;
+const userOvRate = w => {   // talk-overs committed / all that member's exchanges
+  let ov = 0, n = 0;
+  for (const p of PAIRS) {
+    if (p.w1 === w) { ov += p.ov1; n += p.n1 + p.ov1; }
+    if (p.w2 === w) { ov += p.ov2; n += p.n2 + p.ov2; }
+  }
+  return n ? ov / n : 0;
+};
 
 function showPair(p) {
   const rTot = p.r12 + p.r21 || 1, hTot = p.heard12 + p.heard21 || 1;
@@ -391,6 +417,22 @@ function showPair(p) {
     <div class="hbar"><span class="nm">${NAME[p.w2]} heard</span>
       <span class="tr"><span class="fl green" style="width:${Math.round(100*p.heard21/hTot)}%"></span></span>
       <span class="vl">${p.heard21}</span></div>
+    <h3>timing — reply latency &amp; talk-overs</h3>
+    <div class="hbar"><span class="nm">${NAME[p.w1]} replies</span>
+      <span class="tr"><span class="fl" style="width:${Math.round(100*(p.lat1||0)/3)}%"></span></span>
+      <span class="vl">${p.lat1 != null ? p.lat1 + "s" : "—"}</span></div>
+    <div class="hbar"><span class="nm">${NAME[p.w2]} replies</span>
+      <span class="tr"><span class="fl own" style="width:${Math.round(100*(p.lat2||0)/3)}%"></span></span>
+      <span class="vl">${p.lat2 != null ? p.lat2 + "s" : "—"}</span></div>
+    <div class="hbar"><span class="nm">${NAME[p.w1]} talks over</span>
+      <span class="tr"><span class="fl green" style="width:${Math.round(100*ovRate(p.ov1,p.n1))}%"></span></span>
+      <span class="vl">${Math.round(100*ovRate(p.ov1,p.n1))}%</span></div>
+    <div class="hbar"><span class="nm">${NAME[p.w2]} talks over</span>
+      <span class="tr"><span class="fl green" style="width:${Math.round(100*ovRate(p.ov2,p.n2))}%"></span></span>
+      <span class="vl">${Math.round(100*ovRate(p.ov2,p.n2))}%</span></div>
+    <div class="legendrow">latency = median gap before replying (floored by 1s SRT
+      resolution — <code>--audio</code> VAD refines) · talk-over = started before
+      the other finished (${p.ov1 + p.ov2} events)</div>
     ${spanNote}
     <div class="note">Reply counts are amplified ~3–4× because every nearby recorder captures the same
       exchange — read the <i>ratio</i> between directions, not the absolute numbers.</div>

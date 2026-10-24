@@ -1,9 +1,14 @@
 {
  "basis": "review/DAY1_*.csv — day-1 transcripts for all 6 wearers; week-level trends extrapolated from HANDOFF.md graph stats",
+ "audio_vad": false,
  "signals": {
   "co_presence": "same utterance captured by two wearers within 6s (physical proximity / heard_by signal)",
   "replies": "speaker A immediately followed (<4s) by speaker B",
-  "hourly": "utterances captured per hour; 'own' = wearer's own speech"
+  "hourly": "utterances captured per hour; 'own' = wearer's own speech",
+  "latency": "median seconds between A's utterance end and B's start (rapport proxy, per dyad direction)",
+  "overlap": "B starts before A ends — talk-over/interruption events",
+  "voiced_s": "seconds of own speech (transcript durations)",
+  "monologue": "consecutive same-speaker streak, mean/max"
  },
  "users": {
   "A1_JAKE": {
@@ -65,7 +70,10 @@
     "Violet": 6,
     "俢硕": 1,
     "Consumer": 1
-   }
+   },
+   "voiced_s": 4712,
+   "monologue_mean": 1.7,
+   "monologue_max": 27
   },
   "A2_ALICE": {
    "utterances_captured": 9571,
@@ -128,7 +136,10 @@
     "Little Lucia": 1,
     "Narrator": 1,
     "Boss": 1
-   }
+   },
+   "voiced_s": 2587,
+   "monologue_mean": 1.5,
+   "monologue_max": 18
   },
   "A3_TASHA": {
    "utterances_captured": 9617,
@@ -184,7 +195,10 @@
     "xiaowei": 1,
     "Little Lucia": 1,
     "Tasha and Shure": 1
-   }
+   },
+   "voiced_s": 3308,
+   "monologue_mean": 1.6,
+   "monologue_max": 15
   },
   "A4_LUCIA": {
    "utterances_captured": 9480,
@@ -246,7 +260,10 @@
     "Jack": 1,
     "Little Lucia": 1,
     "Driver": 1
-   }
+   },
+   "voiced_s": 4094,
+   "monologue_mean": 1.9,
+   "monologue_max": 27
   },
   "A5_KATRINA": {
    "utterances_captured": 8204,
@@ -310,7 +327,10 @@
     "KLucia": 1,
     "Little Lucia": 1,
     "小汾": 1
-   }
+   },
+   "voiced_s": 3116,
+   "monologue_mean": 1.7,
+   "monologue_max": 29
   },
   "A6_SHURE": {
    "utterances_captured": 9072,
@@ -373,7 +393,10 @@
     "Speaker": 2,
     "Server": 2,
     "Little Lucia": 1
-   }
+   },
+   "voiced_s": 3927,
+   "monologue_mean": 1.8,
+   "monologue_max": 42
   }
  },
  "co_presence": {
@@ -466,6 +489,128 @@
    "first": 11.17,
    "last": 18.62,
    "span_hours": 7.45
+  }
+ },
+ "pair_extras": {
+  "A1-A6": {
+   "lat_f": 1.0,
+   "n_f": 363,
+   "lat_b": 1.0,
+   "n_b": 515,
+   "ov_f": 249,
+   "ov_b": 226
+  },
+  "A1-A4": {
+   "lat_b": 1.0,
+   "n_b": 473,
+   "lat_f": 1.0,
+   "n_f": 426,
+   "ov_f": 352,
+   "ov_b": 325
+  },
+  "A4-A6": {
+   "lat_b": 1.0,
+   "n_b": 195,
+   "lat_f": 1.0,
+   "n_f": 157,
+   "ov_b": 115,
+   "ov_f": 133
+  },
+  "A1-A5": {
+   "lat_b": 1.0,
+   "n_b": 344,
+   "lat_f": 1.0,
+   "n_f": 296,
+   "ov_f": 300,
+   "ov_b": 276
+  },
+  "A5-A6": {
+   "lat_f": 1.0,
+   "n_f": 244,
+   "lat_b": 1.0,
+   "n_b": 247,
+   "ov_f": 128,
+   "ov_b": 128
+  },
+  "A2-A4": {
+   "lat_b": 1.0,
+   "n_b": 256,
+   "lat_f": 1.0,
+   "n_f": 229,
+   "ov_f": 164,
+   "ov_b": 126
+  },
+  "A4-A5": {
+   "lat_b": 1.0,
+   "n_b": 237,
+   "lat_f": 1.0,
+   "n_f": 258,
+   "ov_b": 149,
+   "ov_f": 159
+  },
+  "A3-A5": {
+   "lat_b": 1.0,
+   "n_b": 193,
+   "lat_f": 1.0,
+   "n_f": 163,
+   "ov_f": 126,
+   "ov_b": 130
+  },
+  "A1-A2": {
+   "lat_f": 1.0,
+   "n_f": 282,
+   "lat_b": 1.0,
+   "n_b": 321,
+   "ov_b": 242,
+   "ov_f": 191
+  },
+  "A2-A6": {
+   "lat_f": 1.0,
+   "n_f": 96,
+   "lat_b": 1.0,
+   "n_b": 88,
+   "ov_f": 90,
+   "ov_b": 45
+  },
+  "A2-A5": {
+   "lat_b": 1.0,
+   "n_b": 172,
+   "lat_f": 1.0,
+   "n_f": 178,
+   "ov_b": 96,
+   "ov_f": 129
+  },
+  "A3-A6": {
+   "lat_b": 1.0,
+   "n_b": 111,
+   "lat_f": 1.0,
+   "n_f": 93,
+   "ov_b": 86,
+   "ov_f": 76
+  },
+  "A1-A3": {
+   "lat_b": 1.0,
+   "n_b": 349,
+   "lat_f": 1.0,
+   "n_f": 397,
+   "ov_b": 293,
+   "ov_f": 221
+  },
+  "A3-A4": {
+   "lat_f": 1.0,
+   "n_f": 280,
+   "lat_b": 1.0,
+   "n_b": 247,
+   "ov_b": 143,
+   "ov_f": 129
+  },
+  "A2-A3": {
+   "lat_b": 1.0,
+   "n_b": 447,
+   "lat_f": 1.0,
+   "n_f": 441,
+   "ov_f": 167,
+   "ov_b": 149
   }
  },
  "reply_edges_top": [
