@@ -460,6 +460,191 @@ async function showPerson(pid) {
 }
 // ---------- /people ----------
 
+// ---------- semantic zoom lenses: themes | causal | all ----------
+async function fetchThemes() {
+  const d = await api("/api/zoom/themes");
+  lastThemes = d.themes;
+  lastLinks = d.links;
+}
+
+function setLens(l) {
+  lens = l;
+  document.querySelectorAll(".lensbtn").forEach(b =>
+    b.classList.toggle("on", b.dataset.l === l));
+  if (l !== "causal") $("#crumb").style.display = "none";
+}
+
+function zoomCausal(nodeId) {
+  curTheme = +String(nodeId).replace(/^t/, "");
+  setLens("causal");
+  loadGraph();
+}
+
+async function loadThemes() {
+  await fetchThemes();
+  $("#crumb").style.display = "none";
+  const els = [];
+  (lastThemes || []).forEach((t, i) => {
+    const a = t.days.length ? t.days[0] : "?", b = t.days.length ? t.days[t.days.length - 1] : "?";
+    els.push({data: {id: "t" + t.id, type: "THEME",
+                     label: `${t.name}\n${t.n_events} events · D${a}–D${b}`,
+                     n_events: t.n_events},
+              position: {x: (t.t_median || 0) * 0.010, y: (i % 3) * 170}});
+  });
+  for (const l of lastLinks || [])
+    els.push({data: {id: `tl${l.src}-${l.dst}`, source: "t" + l.src, target: "t" + l.dst,
+                     relation: "THEME_LINK", n: l.n, infl: (l.by_relation || {}).INFLUENCES || 0}});
+  if (cy) cy.destroy();
+  cy = cytoscape({container: $("#cy"), elements: els, style,
+    wheelSensitivity: 0.3, minZoom: 0.05, maxZoom: 4});
+  cy.fit(undefined, 40);
+  let lastTap = {id: null, t: 0};
+  cy.on('tap', 'node[type="THEME"]', ev => {
+    const id = ev.target.data('id'), now = Date.now();
+    if (lastTap.id === id && now - lastTap.t < 400) zoomCausal(id);
+    else { lastTap = {id, t: now}; showThemeCard(+id.slice(1)); }
+  });
+}
+
+async function loadTheme() {
+  if (!lastThemes) await fetchThemes();
+  if (!curTheme || !(lastThemes || []).some(t => t.id === curTheme))
+    curTheme = lastThemes && lastThemes.length ? lastThemes[0].id : null;
+  const insp = $("#inspector");
+  if (curTheme == null) {
+    insp.innerHTML = `<p style="color:var(--dim)">no themes yet — run python -m cde.themes</p>`;
+    return;
+  }
+  const d = await api(`/api/zoom/theme/${curTheme}`);
+  const th = d.theme || {};
+  $("#crumb").innerHTML = `themes › <b>${th.name || curTheme}</b>`;
+  $("#crumb").style.display = "inline";
+  const [lo, hi] = dayRange();
+  const evNodes = d.nodes.filter(n => n.type === "EVENT" && n.day >= lo && n.day <= hi);
+  const evIds = new Set(evNodes.map(n => n.id));
+  const intra = d.edges.filter(e => e.relation !== "CROSS_THEME"
+    && evIds.has(e.src) && evIds.has(e.dst));
+  const els = buildElements({nodes: evNodes, edges: intra});
+  const stubs = d.nodes.filter(n => n.type === "THEME");
+  const maxX = Math.max(0, ...els.filter(e => e.position).map(e => e.position.x)) + 200;
+  stubs.forEach((s, i) => els.push({
+    data: {id: s.id, type: "THEME", label: `${s.label}\n${s.n_events} events`,
+           n_events: s.n_events},
+    position: {x: maxX, y: i * 110}, classes: "stub"}));
+  const present = new Set(els.map(e => e.data.id));
+  for (const e of d.edges)
+    if (e.relation === "CROSS_THEME" && present.has(e.src) && present.has(e.dst))
+      els.push({data: {id: e.id, source: e.src, target: e.dst,
+                       relation: "CROSS_THEME", n: e.n}});
+  if (cy) cy.destroy();
+  cy = cytoscape({container: $("#cy"), elements: els, style,
+    wheelSensitivity: 0.3, minZoom: 0.05, maxZoom: 4});
+  cy.fit(undefined, 40);
+  const sp = d.spine || [];
+  sp.forEach(id => cy.getElementById("e" + id).addClass("chain"));
+  for (let i = 0; i + 1 < sp.length; i++)
+    cy.edges(`[source="e${sp[i]}"][target="e${sp[i + 1]}"]`).addClass("chain");
+  cy.on('tap', 'node[type="EVENT"]', ev => inspect(ev.target.data('id').slice(1)));
+  cy.on('tap', 'node[type="THEME"]', ev =>
+    { curTheme = +ev.target.data('id').slice(1); loadTheme(); });
+}
+
+async function showThemeCard(tid) {
+  if (!lastThemes) await fetchThemes();
+  const t = (lastThemes || []).find(x => x.id === tid);
+  if (!t) return;
+  const insp = $("#inspector");
+  insp.innerHTML = `<h2>${t.name}</h2>
+    <div class="meta">${t.n_events} events · days ${t.days.join(", ") || "—"} · ${t.n_causal} causal edges</div>
+    <p>${t.description || ""}</p>
+    <h3>top goals</h3>${t.top_goals.map(g =>
+      `<div class="mention">${g[1]} <span style="color:var(--dim)">×${g[2]}</span></div>`).join("") || "—"}
+    <h3>top people</h3><div class="meta">${t.top_people.map(p => `${p[0]} ×${p[1]}`).join(", ") || "—"}</div>
+    <h3>moods</h3><div class="meta">${t.moods.map(m => `${m[0]} ×${m[1]}`).join(", ") || "—"}</div>
+    <button id="tracebtn">zoom into cause → effect</button>`;
+  insp.querySelector("#tracebtn").onclick = () => zoomCausal("t" + t.id);
+}
+
+// ---------- insights ----------
+const LENS_LABELS = {portrait: "Big picture", self: "You",
+  around_you: "How others act around you", you_around: "How you act around them",
+  threads: "Your threads"};
+const LENS_ORDER = ["portrait", "self", "around_you", "you_around", "threads"];
+
+async function showInsights() {
+  stopAudio();
+  const ins = await api("/api/insights");
+  const insp = $("#inspector");
+  if (!ins.length) {
+    insp.innerHTML = `<h2>insights</h2>
+      <p style="color:var(--dim)">no insights computed yet — run python -m cde.insights</p>`;
+    return;
+  }
+  let html = `<h2>insights</h2>`;
+  for (const l of LENS_ORDER) {
+    const cards = ins.filter(x => x.lens === l);
+    if (!cards.length) continue;
+    html += `<h3>${LENS_LABELS[l] || l}</h3>` + cards.map(x => {
+      const stat = Object.entries(x.stat || {})
+        .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(" / ") : v}`).join(" · ");
+      const badge = x.status === "observed" ? "var(--green)" : "var(--accent)";
+      return `<div class="edgecard inscard" data-i="${x.id}">
+        <b>${x.title}</b> <span style="color:${badge};font-size:10px">${x.status}</span>
+        <div class="rat">${x.body}</div>
+        ${stat ? `<div class="dayrow">${stat}</div>` : ""}
+      </div>`;
+    }).join("");
+  }
+  insp.innerHTML = html;
+  insp.querySelectorAll(".inscard").forEach(c =>
+    c.onclick = () => showInsight(+c.dataset.i));
+}
+
+async function showInsight(id) {
+  stopAudio();
+  const d = await api(`/api/insight/${id}`);
+  const insp = $("#inspector");
+  if (d.error) { insp.innerHTML = `<p>${d.error}</p>`; return; }
+  const stat = Object.entries(d.stat || {})
+    .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(" / ") : v}`).join(" · ");
+  const quotes = (d.quotes || []).map(q =>
+    `<div class="utt">${pbtn(q.id)}<b>D${q.day} ${q.hms} ${q.speaker}</b> ${q.text_en || ""}` +
+    (q.text_zh ? `<span class="zh">${q.text_zh}</span>` : "") + `</div>`).join("");
+  const evs = (d.events || []).map(e =>
+    `<div class="edgecard" data-node="e${e.id}"><b>D${e.day} ${e.hms}</b> ${e.summary}</div>`).join("");
+  const edg = (d.edges || []).map(e =>
+    `<div class="edgecard"><span class="rel">${e.relation}</span>
+      <span style="color:var(--dim)"> conf ${e.confidence ?? "—"}</span>
+      <div class="rat">${(e.src || {}).summary || "e" + (e.src || {}).id} → ${(e.dst || {}).summary || "e" + (e.dst || {}).id}</div>
+    </div>`).join("");
+  const goals = (d.goals || []).map(g =>
+    `<div class="mention"><a href="#" data-goal="${g.id}" style="color:#bc8cff">${g.canonical}</a></div>`).join("");
+  insp.innerHTML = `<h2>${d.title}</h2>
+    <div class="meta">${LENS_LABELS[d.lens] || d.lens} · ${d.status}${stat ? " · " + stat : ""}</div>
+    <p>${d.body || ""}</p>
+    ${quotes ? `<h3>quotes</h3>${quotes}` : ""}
+    ${evs ? `<h3>events</h3>${evs}` : ""}
+    ${edg ? `<h3>edges</h3>${edg}` : ""}
+    ${goals ? `<h3>goals</h3>${goals}` : ""}
+    <button id="tracebtn">← back to insights</button>`;
+  insp.querySelector("#tracebtn").onclick = showInsights;
+  bindPlayButtons(insp);
+  insp.querySelectorAll(".edgecard[data-node]").forEach(c => c.onclick = () => {
+    const nid = c.dataset.node, n = cy && cy.getElementById(nid);
+    if (n && n.nonempty()) cy.animate({center: {eles: n}, zoom: cy.zoom()}, {duration: 300});
+    inspect(nid.slice(1));
+  });
+  insp.querySelectorAll("[data-goal]").forEach(a => a.onclick = ev => {
+    ev.preventDefault(); showGoal(a.dataset.goal);
+  });
+}
+// ---------- /insights ----------
+
+document.querySelectorAll(".lensbtn").forEach(b =>
+  b.onclick = () => { setLens(b.dataset.l); loadGraph(); });
+$("#crumb").onclick = () => { setLens("themes"); loadGraph(); };
+$("#btninsights").onclick = showInsights;
+
 // ---------- replay mode ----------
 let rp = null;  // {timer, simT, nodes, pendingEdges, parent(comp), compEdges, speed}
 const HOUR_MS = 1200;          // 1 sim-hour per 1.2s at speed 1
@@ -570,7 +755,11 @@ function stopReplay(done) {
   $("#clock").textContent = done ? "replay complete" : "";
 }
 
-$("#btnreplay").onclick = () => { rp ? (stopReplay(false), loadGraph()) : startReplay(); };
+$("#btnreplay").onclick = async () => {
+  if (rp) { stopReplay(false); loadGraph(); return; }
+  if (lens !== "all") { setLens("all"); await loadGraph(); }
+  startReplay();
+};
 $("#btnspeed").onclick = e => {
   if (!rp) return;
   rp.speed = {1: 2, 2: 4, 4: 1}[rp.speed] || 1;
@@ -623,6 +812,10 @@ dayButtons();
 loadStats();
 loadGraph();
 loadPeopleBar();
+// goal bar data comes from the full graph even though 'themes' is the default lens
+api("/api/graph?subject=A1_JAKE&days=1-7").then(d => {
+  if (!lastData) { lastData = d; loadGoalBar(); }
+});
 </script>
 </body>
 </html>

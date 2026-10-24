@@ -11,12 +11,16 @@ pipeline doesn't use and the agreed priority for adding them.
 | extract | done — 74/74 cached files in `data/extracted/`, 655 events, ~2,930 mentions |
 | embed | done — OpenAI `text-embedding-3-small` (1,536-dim); goals LLM-canonicalized to 270 specific threads ("plan and host the final-day party" 6d/42ev) |
 | link | done — deterministic + 800 pairs judged by `gpt-4o-mini` with positional quote citation; INTERACTION_PATTERN (person→person z-test) built; verdicts cached in `data/judged.json` |
-| patterns | done (stretch) — 12 named clusters + occurrences; PATTERN→PATTERN edges dropped (all pairs trivially "recur daily") |
+| patterns | superseded by themes (12 legacy clusters kept) |
+| themes | done — `python3 -m cde.themes`: 10 named themes (two-step LLM name + classify), every event assigned; cache `data/themes.json` |
+| insights | done — `python3 -m cde.insights`: heard_by presence effects over all 6 recorders, group-size stratified (CMH z), 31 notable → 22 cards |
 
 Edge counts: SPOKE 53,313 · EXPRESSES 2,808 · PARTICIPATED_IN 2,810 ·
 PRECEDES 648 · ADVANCES_GOAL 828 · SIMILAR_TO 249 · **INFLUENCES 22
 (hypothesis, loosened — inferred edges kept + marked) · REFERS_TO 6 ·
-SAME_THREAD 562 · INTERACTION_PATTERN 5 · rejected 210**.
+SAME_THREAD 562 · INTERACTION_PATTERN 50 · rejected 210**.
+
+Full design, decision log, numbers and Q&A prep: README.md.
 
 ## Blocking next step — none; pipeline is complete end-to-end
 

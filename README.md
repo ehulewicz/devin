@@ -295,6 +295,14 @@ Each card stores evidence ids (utterances / events / edges / goals), which
   - Shure, Lucia and Katrina say yes/okay 1.44×, 1.67× and 1.59×.
   - Katrina's talk share is 0.76× (z=−14).
 - Jake around them: laughs 0.71× with Alice and 0.55× with Tasha; says yes/okay 1.57× with Alice.
+- 210 presence effects computed → 31 notable → 22 insight cards.
+
+**Themes (zoom level 1)**
+- Event preparation 215 · Cooking & baking 122 · Social interactions 106 ·
+  Documenting memories 74 · Final-day party 36 · Games & icebreakers 33 ·
+  Dance rehearsal 27 · Room decoration 25 · Money & reimbursements 14 ·
+  Auction & gifts 3.
+- All 270 goals classified explicitly; 428 events placed by goal vote, 227 by embedding.
 
 ---
 
