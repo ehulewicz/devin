@@ -3,86 +3,187 @@
 <head>
 <meta charset="utf-8">
 <title>CDE — Jake's Social World</title>
-<script src="cytoscape.min.js"></script>
+<script src="force-graph.min.js"></script>
 <script src="trends-data.js"></script>
 <style>
   :root {
-    --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e;
-    --accent:#f0883e; --blue:#58a6ff; --green:#3fb950; --purple:#bc8cff; --red:#f85149;
+    --bg:#07090d; --panel:#0d1119; --card:#121826; --border:#232b3d; --fg:#eef1f7;
+    --dim:#8a93a8; --gold:#e8c55d; --accent:#f0883e; --blue:#5ea0f2;
+    --green:#46c26b; --purple:#bc8cff; --red:#f85149;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:13px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif; height:100vh;
-         display:flex; flex-direction:column; }
-  header { padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--border);
-           display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
-  header h1 { font-size:15px; margin:0; font-weight:600; }
-  header .hint { color:var(--dim); font-size:12px; }
-  .mbtn { background:#21262d; color:var(--fg); border:1px solid var(--border); border-radius:6px;
-          padding:3px 10px; margin-right:4px; cursor:pointer; font-size:12px; }
-  .mbtn.on { background:var(--accent); border-color:var(--accent); color:#0d1117; font-weight:600; }
-  .mbtn.ghost { margin-left:auto; }
+  ::selection { background:rgba(232,197,93,.3); }
+  body { margin:0; background:var(--bg); color:var(--fg); height:100vh;
+         font:13px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+         display:flex; flex-direction:column; overflow:hidden;
+         font-variant-numeric:tabular-nums; }
+
+  /* ---------- masthead ---------- */
+  header { background:var(--panel); border-bottom:1px solid var(--border);
+           flex-shrink:0; }
+  .mast { display:flex; align-items:flex-end; justify-content:space-between;
+          padding:14px 22px 10px; gap:16px; }
+  .kicker { font-size:10px; letter-spacing:.22em; color:var(--gold);
+            font-weight:700; }
+  .mast h1 { font-family:var(--serif); font-size:30px; font-weight:400;
+             margin:2px 0 0; letter-spacing:.01em; }
+  .mast .sub { color:var(--dim); font-size:12px; font-style:italic;
+               font-family:var(--serif); margin-top:2px; }
+  .mast-r { display:flex; align-items:center; gap:18px; }
+  .stamp { border:2px solid var(--gold); border-radius:4px; color:var(--gold);
+           font-size:9px; letter-spacing:.18em; text-align:center;
+           padding:5px 12px; transform:rotate(-3deg); line-height:1.5; }
+  .stamp b { font-size:13px; }
   a.mlink { color:var(--blue); font-size:12px; text-decoration:none; }
+  a.mlink:hover { text-decoration:underline; }
+  .ctrls { display:flex; align-items:center; gap:10px; padding:8px 22px 10px;
+           flex-wrap:wrap; border-top:1px solid var(--border); }
+  .ctrls .lbl { font-size:9px; letter-spacing:.15em; color:var(--dim);
+                text-transform:uppercase; margin-right:2px; }
+  .mbtn { background:#151b2a; color:var(--fg); border:1px solid var(--border);
+          border-radius:999px; padding:4px 13px; margin-right:4px;
+          cursor:pointer; font-size:11px; letter-spacing:.03em;
+          transition:all .15s ease; }
+  .mbtn:hover { border-color:var(--gold); color:var(--gold); }
+  .mbtn.on { background:var(--gold); border-color:var(--gold); color:#141008;
+             font-weight:700; }
+  header .hint { color:var(--dim); font-size:11px; font-style:italic; }
+
+  /* ---------- layout ---------- */
   main { flex:1; display:flex; min-height:0; }
-  #cy { flex:1; min-width:0; }
-  #inspector { width:420px; background:var(--panel); border-left:1px solid var(--border);
-               overflow-y:auto; padding:14px; }
-  #inspector h2 { font-size:15px; margin:0 0 4px; }
-  #inspector .meta { color:var(--dim); margin-bottom:10px; font-size:12px; }
-  #inspector h3 { font-size:11px; color:var(--dim); text-transform:uppercase;
-                  letter-spacing:.06em; margin:16px 0 6px; }
-  .statgrid { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
-  .stat { background:#1c2128; border:1px solid var(--border); border-radius:6px;
-          padding:6px 10px; font-size:12px; }
-  .stat b { display:block; font-size:16px; color:var(--fg); }
-  .bars { display:flex; align-items:flex-end; gap:3px; height:80px; margin:6px 0 2px; }
-  .barcol { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; position:relative; }
-  .barcol .cap { width:100%; background:#4a535e; border-radius:2px 2px 0 0; }
-  .barcol .own { width:60%; background:var(--accent); border-radius:2px 2px 0 0; position:absolute; bottom:0; left:20%; }
-  .barcol:hover .cap { background:#5b6672; }
-  .hlabels { display:flex; gap:3px; }
+  #stage { flex:1; min-width:0; position:relative; }
+  #cy { position:absolute; inset:0;
+        background-image:radial-gradient(ellipse at 50% 50%, rgba(232,197,93,.07), transparent 55%),
+                         radial-gradient(circle, #151b28 1px, transparent 1px);
+        background-size:100% 100%, 26px 26px; }
+  #legend { position:absolute; left:16px; bottom:16px; background:#0d1119;
+            border:1px solid #232b3d; border-radius:10px; padding:8px 12px;
+            font-size:11px; color:var(--dim); pointer-events:none; }
+  .float-tooltip-kap { background:#0d1119 !important; border:1px solid #232b3d;
+            border-radius:8px; font-size:12px; color:var(--fg);
+            box-shadow:0 6px 18px rgba(0,0,0,.45); }
+  #inspector { width:430px; background:var(--panel);
+               border-left:1px solid var(--border);
+               overflow-y:auto; padding:18px 20px; }
+  #inspector::-webkit-scrollbar { width:8px; }
+  #inspector::-webkit-scrollbar-thumb { background:#232b3d; border-radius:4px; }
+  @keyframes rise { from { opacity:0; transform:translateY(10px); }
+                    to { opacity:1; transform:none; } }
+  #inspector > * { animation:rise .3s ease both; }
+  #inspector > *:nth-child(n+5) { animation-delay:.04s; }
+  #inspector > *:nth-child(n+9) { animation-delay:.08s; }
+  #inspector h2 { font-family:var(--serif); font-size:22px; font-weight:400;
+                  margin:0 0 4px; }
+  #inspector .meta { color:var(--dim); margin-bottom:12px; font-size:12px; }
+  #inspector h3 { font-size:10px; color:var(--dim); text-transform:uppercase;
+                  letter-spacing:.14em; margin:20px 0 8px; font-weight:700;
+                  padding-top:12px; border-top:1px solid var(--border);
+                  position:relative; }
+  #inspector h3::before { content:""; position:absolute; top:-1px; left:0;
+                        width:34px; height:1px; background:var(--gold); }
+
+  /* ---------- figures ---------- */
+  .statgrid { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; }
+  .stat { background:var(--card); border:1px solid var(--border); border-radius:8px;
+          padding:8px 12px; font-size:10px; color:var(--dim); cursor:help;
+          transition:border-color .15s; }
+  .stat:hover { border-color:var(--gold); }
+  .stat b { display:block; font-size:19px; color:var(--fg); font-weight:600;
+            letter-spacing:-.01em; }
+  .bars { display:flex; align-items:flex-end; gap:3px; height:84px; margin:8px 0 2px;
+          padding:8px 4px 0; border:1px solid var(--border); border-radius:8px;
+          background:var(--card); }
+  .barcol { flex:1; display:flex; flex-direction:column; justify-content:flex-end;
+            align-items:center; position:relative; height:100%; }
+  .barcol .cap { width:100%; background:#3a4358; border-radius:2px 2px 0 0;
+                 transition:background .15s; }
+  .barcol .own { width:60%; background:var(--accent); border-radius:2px 2px 0 0;
+                 position:absolute; bottom:0; left:20%; }
+  .barcol:hover .cap { background:#55617a; }
+  .hlabels { display:flex; gap:3px; padding:0 4px; }
   .hlabels span { flex:1; text-align:center; font-size:9px; color:var(--dim); }
-  .legendrow { font-size:10px; color:var(--dim); margin-top:2px; }
+  .legendrow { font-size:10px; color:var(--dim); margin:4px 0 2px; line-height:1.4; }
   .legendrow i { display:inline-block; width:10px; height:10px; border-radius:2px;
                  vertical-align:-1px; margin-right:4px; }
-  .hbar { display:flex; align-items:center; gap:6px; margin:3px 0; font-size:12px; }
-  .hbar .nm { width:86px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .hbar .tr { flex:1; background:#21262d; border-radius:3px; height:12px; position:relative; }
-  .hbar .fl { display:block; background:var(--blue); height:100%; border-radius:3px; }
+  .hbar { display:flex; align-items:center; gap:8px; margin:4px 0; font-size:12px; }
+  .hbar .nm { width:92px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .hbar .tr { flex:1; background:#1a2130; border-radius:4px; height:11px;
+              position:relative; overflow:hidden; }
+  .hbar .fl { display:block; background:var(--blue); height:100%; border-radius:4px;
+              transition:width .4s ease; }
   .hbar .fl.own { background:var(--accent); }
   .hbar .fl.green { background:var(--green); }
   .hbar .vl { width:56px; text-align:right; color:var(--dim); font-size:11px; }
-  .pairrow { padding:5px 8px; border:1px solid var(--border); border-radius:6px; margin:4px 0;
-             cursor:pointer; font-size:12px; display:flex; justify-content:space-between; }
-  .pairrow:hover { border-color:var(--blue); }
-  .pairrow .v { color:var(--accent); }
-  .note { border-left:3px solid var(--accent); background:#1c2128; padding:6px 10px;
-          margin:8px 0; font-size:12px; border-radius:0 6px 6px 0; }
+  .pairrow { padding:7px 10px; border:1px solid var(--border); border-radius:8px;
+             margin:5px 0; cursor:pointer; font-size:12px; background:var(--card);
+             display:flex; justify-content:space-between; align-items:center;
+             transition:all .15s; }
+  .pairrow:hover { border-color:var(--gold); transform:translateX(3px); }
+  .pairrow .v { color:var(--gold); font-weight:600; }
+  .pairrow .rn { color:var(--dim); font-size:10px; margin-right:8px;
+                 font-family:var(--serif); font-style:italic; }
+
+  /* ---------- notes / theories ---------- */
+  .note { border-left:3px solid var(--accent); background:var(--card);
+          padding:8px 12px; margin:8px 0; font-size:12px;
+          border-radius:0 8px 8px 0; }
   .note.assumed { border-left-color:var(--purple); }
-  .note .tag { font-size:10px; color:var(--purple); font-weight:700; letter-spacing:.05em; }
-  .backbtn { width:100%; margin-top:12px; padding:7px; background:#21262d; color:var(--fg);
-             border:1px solid var(--border); border-radius:6px; cursor:pointer; font-size:12px; }
-  ul.tight { margin:4px 0; padding-left:18px; font-size:12px; }
-  ul.tight li { margin:3px 0; }
+  .note .tag { font-size:9px; color:var(--purple); font-weight:700;
+               letter-spacing:.14em; }
+  .theory { border:1px solid var(--border); border-radius:10px; padding:12px 14px;
+            margin:8px 0; background:var(--card); font-size:12px;
+            transition:border-color .2s, transform .2s; }
+  .theory:hover { border-color:#3a4661; transform:translateY(-1px); }
+  .theory .claim { font-family:var(--serif); font-size:14.5px; font-style:italic;
+                   margin-bottom:8px; line-height:1.35; }
+  .theory .verdict { display:inline-block; font-size:9px; font-weight:700;
+                     font-style:normal; font-family:-apple-system,sans-serif;
+                     letter-spacing:.12em; border-radius:4px; padding:2px 8px;
+                     margin-left:8px; vertical-align:2px; }
+  .verdict.supported { background:rgba(70,194,107,.16); color:var(--green); }
+  .verdict.mixed { background:rgba(232,197,93,.16); color:var(--gold); }
+  .verdict.rejected { background:rgba(248,81,73,.16); color:var(--red); }
+  .theory .row { margin:5px 0; }
+  .theory .lbl { color:var(--dim); font-size:9px; text-transform:uppercase;
+                 letter-spacing:.12em; }
+  .theory .forjake { border-left:3px solid var(--gold); padding-left:10px;
+                     margin-top:8px; }
+  .backbtn { width:100%; margin-top:14px; padding:9px; background:#151b2a;
+             color:var(--fg); border:1px solid var(--border); border-radius:999px;
+             cursor:pointer; font-size:12px; transition:all .15s; }
+  .backbtn:hover { border-color:var(--gold); color:var(--gold); }
+  ul.tight { margin:6px 0; padding-left:18px; font-size:12px; }
+  ul.tight li { margin:4px 0; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Jake's Social World <span style="color:var(--dim);font-size:11px;font-weight:400">— the cognitive graph lives in Jake's head; everyone below is analysed as part of his world</span></h1>
-  <span>
-    edge metric:
-    <button class="mbtn on" data-m="copresence">time together</button>
-    <button class="mbtn" data-m="replies">replies</button>
-    <button class="mbtn" data-m="exposure">hearing each other</button>
-    <button class="mbtn" data-m="bond">bond (all-in-one)</button>
-  </span>
-  <button class="mbtn" id="fit">⤢ fit</button>
-  <span id="uchips"></span>
-  <span class="hint">Jake is the subject — gold ring everywhere. Pick anyone to see them through Jake's data; orbit nodes sit closer when the bond is stronger.</span>
-  <a class="mlink" href="/">event graph →</a>
+  <div class="mast">
+    <div class="mast-l">
+      <div class="kicker">EGOLIFE COHORT · DAY 1 FIELD STUDY · SUBJECT A1</div>
+      <h1>Jake's Social World</h1>
+      <div class="sub">the week through one man's microphone — and the five people orbiting him</div>
+    </div>
+    <div class="mast-r">
+      <a class="mlink" href="/">event graph →</a>
+      <div class="stamp">SUBJECT<br><b>JAKE</b></div>
+    </div>
+  </div>
+  <div class="ctrls">
+    <span class="lbl">view</span><span id="uchips"></span>
+    <span class="lbl" style="margin-left:10px">edge</span><span>
+      <button class="mbtn on" data-m="copresence">time together</button>
+      <button class="mbtn" data-m="replies">replies</button>
+      <button class="mbtn" data-m="exposure">hearing each other</button>
+      <button class="mbtn" data-m="bond">bond</button>
+    </span>
+    <button class="mbtn" id="fit">⤢ fit</button>
+    <span class="hint">orbit sits closer when the bond is stronger — click a node or link for the story</span>
+  </div>
 </header>
 <main>
-  <div id="cy"></div>
+  <div id="stage"><div id="cy"></div><div id="legend"></div></div>
   <div id="inspector"><p style="color:var(--dim)">Loading…</p></div>
 </main>
 <script>
@@ -217,6 +318,58 @@ const ASSUMED = {
   A5_KATRINA: "She probably stays a steady mid-level member; quiet afternoons like day 1's may recur.",
   A6_SHURE: "Expect the evening exits and the girlfriend/sister thread to keep repeating — he lives a second social life the group doesn't see.",
 };
+// theories: claim -> bias that could fake it -> cross-check -> verdict -> takeaway
+const THEORIES = [
+  { claim: "\"Jake is introverted — he just talks a lot because it's his recording.\"",
+    bias: "A microphone records its wearer most — self-share is inflated by design.",
+    check: "Check other mics: Jake is heard 2,309× in Alice's file (more than Alice herself, 1,793), 2,323× in Tasha's (vs her 2,114), 2,024× in Lucia's, 1,786× in Katrina's, 1,807× in Shure's. He's the #1–2 voice on all six recorders — not just his own.",
+    verdict: "rejected",
+    verdictText: "The dominance is real, not recorder bias — five other microphones confirm it. Introvert doesn't fit; he's the group's most heard voice.",
+    forJake: "Trust the \"I talk a lot\" signal — it's validated. The intro/extro question aside, 40–50% of his replies start before the other person finishes."},
+  { claim: "\"Alice is quiet.\"",
+    bias: "Maybe Jake's mic just rarely catches her — an earshot artifact.",
+    check: "Her OWN recorder agrees: lowest self-share (19%), fewest own lines (1,793), least airtime (~43 min). Four other mics also hear her least.",
+    verdict: "supported",
+    verdictText: "Genuinely quiet — corroborated by her own microphone, not just the group's.",
+    forJake: "She's beside him constantly but barely audible — his graph undercounts her influence. Her presence, not her words, is her signal."},
+  { claim: "\"Lucia is central only because she's always next to Jake.\"",
+    bias: "Jake-proximity could inflate her everywhere his recorder reaches.",
+    check: "She's the #2-most-heard voice in every file — including ones where Jake is less present (Katrina hears her 1,698×, Alice 1,752×). Non-Jake dyads are strong: Tasha–Lucia ~2,140 replies combined, Katrina–Lucia ~1,800.",
+    verdict: "mixed",
+    verdictText: "Her centrality is real, but Jake's constant earshot still flatters her rank a little.",
+    forJake: "\"Lucia is MY #1\" and \"Lucia is the group's #2\" are different claims — both true, don't conflate them."},
+  { claim: "\"Shure leaves early — or his mic just stops working.\"",
+    bias: "Could be a recording artifact: dead battery, stopped logging.",
+    check: "His own recorder keeps running to ~22:09 while every co-presence pair ends ~18:37. If the mic failed, his file would end too — it doesn't.",
+    verdict: "supported",
+    verdictText: "He physically leaves the shared space — a behavior, not an artifact.",
+    forJake: "Shure's evenings (girlfriend/sister thread) are invisible to the group's data — a genuine blind spot in Jake's model of him."},
+  { claim: "\"Katrina's empty afternoon is her personal dip.\"",
+    bias: "Could equally be a group-wide gap nobody recorded.",
+    check: "All six mics thin 14–17 (the universal break), but Katrina's is deepest — 81 captured at 14h vs hundreds for others.",
+    verdict: "mixed",
+    verdictText: "Mostly the group's scheduled break — corroborated by all six recorders — with a personal dip on top.",
+    forJake: "Cross-file agreement is what separates a group event from an individual absence — always check a second mic."},
+  { claim: "\"High talk-over means rudeness.\"",
+    bias: "Overlap could just be animated, engaged conversation.",
+    check: "The spread is huge: Alice–Tasha overlap 25–27%, Jake's dyads 36–50%. The hottest pairs are the busiest, not the angriest.",
+    verdict: "mixed",
+    verdictText: "Talk-over tracks engagement, not conflict — but Jake sits at the high end with everyone, so it's his pattern.",
+    forJake: "His interruptions are systematic, not occasional — the place to give quiet members (Alice) more room."},
+  { claim: "\"Jake organizes: people come to him more than he goes to them.\"",
+    bias: "Could be artifact of him being loud — replies TO him just drown out his own.",
+    check: "Directional reply counts: inbound exceeds outbound in 3 of 5 dyads — Shure→Jake 1,562 vs 1,468 back; Tasha→Jake 1,518 vs 1,465; Katrina→Jake 1,335 vs 1,326. Lucia and Alice dyads are balanced.",
+    verdict: "supported",
+    verdictText: "He's addressed more than he initiates — the organizer role is real.",
+    forJake: "He carries the coordination load for the group — a real burden, and a place to delegate."},
+  { claim: "\"These numbers prove personality.\"",
+    bias: "Second-resolution timestamps, ~3–4× reply amplification, single-day sample, earshot limits.",
+    check: "All latency medians floor at exactly 1.0s (resolution, not measurement); every exchange is counted once per nearby mic; anything outside earshot doesn't exist.",
+    verdict: "mixed",
+    verdictText: "The data proves behavior under observation — who was near whom, who spoke — not traits, motives, or anything off-mic.",
+    forJake: "Read everything as \"what was captured\", and treat week-level guesses as hypotheses until the full week is computed."},
+];
+
 // how the Jake-only cognitive graph biases what we can say about each person
 const JAKEY = {
   A1_JAKE: "This is Jake's head: every event, goal and 'influence' link is something his own recorder heard — blind spots exist wherever he wasn't present.",
@@ -228,94 +381,252 @@ const JAKEY = {
 };
 
 // ---------- graph ----------
-let cy, curUser = "A1_JAKE";         // Jake's perspective by default; null = group mesh
+let G = null, curUser = "A1_JAKE";   // Jake's perspective by default; null = group mesh
+let hl = null, hoverId = null, hoverPair = null, fitPending = false;
+let graphNodes = [], bloom = null, prevEgoHub = null;
 const maxOwn = Math.max(...WEARERS.map(w => D.users[w].own_utterances));
+const maxDir = Math.max(...PAIRS.map(p => Math.max(p.r12, p.r21)), 1);
 
-const CY_STYLE = [
-  { selector: "node", style: {
-      "background-color": n => COLOR[n.data("wearer")],
-      "width": n => (n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn)) * (n.data("subject") ? 1.35 : 1),
-      "height": n => (n.data("hub") ? 90 : 20 + 34 * (n.data("own") / maxOwn)) * (n.data("subject") ? 1.35 : 1),
-      "label": n => n.data("name") + "\n" + n.data("own") + " utts",
-      "color": "#e6edf3", "font-size": 11, "text-valign": "bottom",
-      "text-margin-y": 5, "text-wrap": "wrap", "text-max-width": "90px",
-      "border-width": 0 }},
-  { selector: "node[?hub]", style: {
-      "font-size": 15, "font-weight": 700, "border-width": 4,
-      "border-color": "#ffd33d" }},
-  { selector: "node[?subject]", style: {   // Jake: gold ring in every view
-      "border-width": 4, "border-color": "#ffd33d", "font-weight": 700 }},
-  { selector: "edge", style: {
-      "width": e => 1 + 11 * e.data("norm"),
-      "line-color": "#3d444d", "opacity": 0.75,
-      "curve-style": "bezier",
-      "label": e => METRICS[metric].fmt(e.data("v")),
-      "font-size": 10, "color": "#e6edf3", "text-opacity": 0,
-      "text-background-color": "#0d1117", "text-background-opacity": 0.85,
-      "text-background-padding": 2 }},
-  { selector: "edge[?ego]", style: { "text-opacity": 1, "font-size": 12 }},
-  { selector: ".faded", style: { "opacity": 0.12 }},
-  { selector: "edge.hi", style: { "line-color": "#f0883e", "opacity": 1 }},
-  { selector: "node.hi", style: { "border-width": 3, "border-color": "#ffd33d" }},
-];
+const hexRGB = h => h ? [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)] : [128,128,128];
+const IDCOL = {};
+WEARERS.forEach(w => IDCOL[CODE[w]] = COLOR[w]);
+const srcCol = l => (l.source && l.source.color) ? l.source.color : (IDCOL[l.source] || "#888");
+const mixc = (h, o, k) => hexRGB(h).map((c,i) => Math.round(c + (o[i]-c)*k));
+const lighten = (h,k) => `rgb(${mixc(h,[255,255,255],k).join(",")})`;
+const darken = (h,k) => `rgb(${mixc(h,[0,0,0],k).join(",")})`;
+const withA = (h,a) => `rgba(${hexRGB(h).join(",")},${a})`;
+const easeOut = k => 1 - Math.pow(1-k, 3);
+
+const dimLink = l => hl && !hl.pairs.has(l.pair);
+const partCount = l => l.flow > 0 && !dimLink(l) ? Math.round(1 + 5*l.flow) : 0;
+const refreshParticles = () => { if (G) G.linkDirectionalParticles(partCount); };
+
+function nodeRadius(n) {
+  const base = n.hub ? 26 : curUser ? 9 + 9*(n.own/maxOwn) : 10 + 10*(n.own/maxOwn);
+  return base * (n.subject ? 1.3 : 1);
+}
+
+function drawNode(n, ctx, gs) {
+  const r = nodeRadius(n), t = performance.now();
+  ctx.globalAlpha = hl && !hl.nodes.has(n.id) ? 0.13 : 1;
+  const g = ctx.createRadialGradient(n.x - r*.35, n.y - r*.35, r*.1, n.x, n.y, r);
+  g.addColorStop(0, lighten(n.color, .55));
+  g.addColorStop(.55, n.color);
+  g.addColorStop(1, darken(n.color, .45));
+  ctx.shadowColor = n.color;
+  ctx.shadowBlur = 24;
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2*Math.PI); ctx.fill();
+  ctx.shadowBlur = 0;
+  if (n.subject) {
+    const p = Math.sin(t/450);
+    ctx.strokeStyle = `rgba(232,197,93,${0.55 + 0.25*p})`;
+    ctx.lineWidth = 2/gs;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r + 6 + 3*p, 0, 2*Math.PI); ctx.stroke();
+    ctx.strokeStyle = `rgba(232,197,93,${0.16 + 0.08*p})`;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r + 14, 0, 2*Math.PI); ctx.stroke();
+    ctx.font = `600 ${10/gs}px -apple-system,"Segoe UI",Roboto,sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.strokeStyle = "#07090d"; ctx.lineWidth = 3/gs;
+    ctx.strokeText("★ SUBJECT", n.x, n.y - r - 22/gs);
+    ctx.fillStyle = "#e8c55d";
+    ctx.fillText("★ SUBJECT", n.x, n.y - r - 22/gs);
+  }
+  if (n.id === hoverId) {
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2/gs;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r + 3, 0, 2*Math.PI); ctx.stroke();
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `600 ${(n.hub ? 15 : 12)/gs}px -apple-system,"Segoe UI",Roboto,sans-serif`;
+  ctx.strokeStyle = "#07090d"; ctx.lineWidth = 3/gs;
+  const y0 = n.y + r + 13/gs;
+  ctx.strokeText(n.name, n.x, y0);
+  ctx.fillStyle = "#eef1f7";
+  ctx.fillText(n.name, n.x, y0);
+  ctx.font = `${10/gs}px -apple-system,"Segoe UI",Roboto,sans-serif`;
+  const sub = `${n.own.toLocaleString()} lines`;
+  ctx.strokeText(sub, n.x, y0 + 13/gs);
+  ctx.fillStyle = "#8a93a8";
+  ctx.fillText(sub, n.x, y0 + 13/gs);
+  ctx.globalAlpha = 1;
+}
+
+function drawLinkLabel(l, ctx, gs) {
+  if (l.dir !== "f") return;
+  if (hl && !hl.pairs.has(l.pair)) return;
+  if (!curUser && gs <= 0.9) return;
+  if (l.source.x == null || l.target.x == null) return;
+  const x = (l.source.x + l.target.x)/2, y = (l.source.y + l.target.y)/2;
+  const txt = METRICS[metric].fmt(l.v);
+  const fs = 11/gs, pad = 7/gs, h = 18/gs;
+  ctx.font = `600 ${fs}px -apple-system,"Segoe UI",Roboto,sans-serif`;
+  const w = ctx.measureText(txt).width + 2*pad, rr = h/2;
+  const hot = (hl && hl.pairs.has(l.pair)) || hoverPair === l.pair;
+  ctx.beginPath();
+  ctx.moveTo(x - w/2 + rr, y - h/2);
+  ctx.arcTo(x + w/2, y - h/2, x + w/2, y + h/2, rr);
+  ctx.arcTo(x + w/2, y + h/2, x - w/2, y + h/2, rr);
+  ctx.arcTo(x - w/2, y + h/2, x - w/2, y - h/2, rr);
+  ctx.arcTo(x - w/2, y - h/2, x + w/2, y - h/2, rr);
+  ctx.fillStyle = "rgba(7,9,13,.88)";
+  ctx.fill();
+  ctx.strokeStyle = hot ? "rgba(232,197,93,.65)" : "rgba(35,43,61,.9)";
+  ctx.lineWidth = 1/gs;
+  ctx.stroke();
+  ctx.fillStyle = hot ? "#e8c55d" : "#cdd3e0";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(txt, x, y);
+}
+
+function preFrame(ctx, gs) {
+  if (bloom) {
+    const k = easeOut(Math.min(1, (performance.now() - bloom.t0)/700));
+    for (const b of bloom.nodes) {
+      b.ref.x = b.ref.fx = b.sx + (b.ref.tx - b.sx)*k;
+      b.ref.y = b.ref.fy = b.sy + (b.ref.ty - b.sy)*k;
+    }
+    if (k >= 1) bloom = null;
+  }
+  if (curUser) {
+    ctx.strokeStyle = "rgba(232,197,93,0.10)";
+    ctx.lineWidth = 1/gs;
+    ctx.setLineDash([4/gs, 6/gs]);
+    for (const n of graphNodes) {
+      if (n.hub || n.x == null) continue;
+      const d = Math.hypot(n.x, n.y);
+      if (d > 1) { ctx.beginPath(); ctx.arc(0, 0, d, 0, 2*Math.PI); ctx.stroke(); }
+    }
+    ctx.setLineDash([]);
+  }
+  const jk = graphNodes.find(n => n.subject);
+  if (jk && jk.x != null) {
+    const g = ctx.createRadialGradient(jk.x, jk.y, 0, jk.x, jk.y, 150);
+    g.addColorStop(0, "rgba(232,197,93,0.16)");
+    g.addColorStop(1, "rgba(232,197,93,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(jk.x, jk.y, 150, 0, 2*Math.PI); ctx.fill();
+  }
+}
+
+function initGraph() {
+  const el = $("#cy");
+  G = new ForceGraph(el);
+  G.width(el.clientWidth || 800)
+   .height(el.clientHeight || 600)
+   .backgroundColor("rgba(0,0,0,0)")
+   .autoPauseRedraw(false)
+   .cooldownTime(3500)
+   .minZoom(0.3).maxZoom(6)
+   .linkCurvature(0.22)
+   .nodeCanvasObjectMode(() => "replace")
+   .nodeCanvasObject(drawNode)
+   .nodePointerAreaPaint((n, color, ctx) => {
+     ctx.fillStyle = color;
+     ctx.beginPath(); ctx.arc(n.x, n.y, nodeRadius(n) + 4, 0, 2*Math.PI); ctx.fill();
+   })
+   .nodeLabel(n => `${n.name} — ${roleTag(n.wearer)}`)
+   .linkColor(l => {
+     if (dimLink(l)) return withA(srcCol(l), 0.05);
+     const hot = (hl && hl.pairs.has(l.pair)) || hoverPair === l.pair;
+     return withA(srcCol(l), hot ? 0.95 : 0.25 + 0.55*l.norm);
+   })
+   .linkWidth(l => 0.6 + 5*l.norm)
+   .linkDirectionalParticles(partCount)
+   .linkDirectionalParticleSpeed(l => 0.003 + 0.006*l.flow)
+   .linkDirectionalParticleWidth(l => 2 + 2*l.norm)
+   .linkDirectionalParticleColor(l => lighten(srcCol(l), 0.4))
+   .linkCanvasObjectMode(() => "after")
+   .linkCanvasObject(drawLinkLabel)
+   .onRenderFramePre(preFrame)
+   .onNodeClick(n => focusNode(n))
+   .onLinkClick(l => focusEdge(l.pair))
+   .onBackgroundClick(() => resetView())
+   .onNodeHover(n => { hoverId = n ? n.id : null; el.style.cursor = n ? "pointer" : "default"; })
+   .onLinkHover(l => { hoverPair = l ? l.pair : null; el.style.cursor = l ? "pointer" : "default"; })
+   .onEngineStop(() => { if (fitPending) { fitPending = false; G.zoomToFit(500, 60); } });
+  new ResizeObserver(() => {
+    if (el.clientWidth) G.width(el.clientWidth).height(el.clientHeight);
+  }).observe(el);
+}
+
+function egoCamera(ms = 600) {
+  const R = Math.max(...graphNodes.filter(n => !n.hub).map(n => n.rad || 0), 120) + 80;
+  const z = Math.min(G.width(), G.height()) / (2*R);
+  G.centerAt(0, 0, ms);
+  G.zoom(z, ms);
+}
+
+function renderLegend() {
+  $("#legend").innerHTML = `● dots flow speaker → responder (more dots = more replies) · line width = ${METRICS[metric].label}${curUser ? " · closer orbit = stronger bond" : ""} · gold halo = subject (Jake)`;
+}
 
 function buildGraph() {
   const mx = maxFor(metric);
-  const els = [];
-  if (!curUser) {
-    // group mesh: everyone equal, force layout clusters strong pairs together
-    for (const w of WEARERS) {
-      const u = D.users[w];
-      els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
-                         own: u.own_utterances, captured: u.utterances_captured,
-                         subject: w === "A1_JAKE" ? 1 : 0 }});
-    }
-    for (const p of PAIRS) {
-      const v = METRICS[metric].get(p);
-      els.push({ data: { id: "p" + p.key, source: CODE[p.w1], target: CODE[p.w2],
-                         pair: p.key, v, norm: v / mx }});
-    }
-  } else {
+  const prev = {};
+  for (const n of graphNodes) prev[n.id] = n;
+  const nodes = [], links = [];
+  const mkNode = w => ({ id: CODE[w], wearer: w, name: NAME[w],
+    own: D.users[w].own_utterances, captured: D.users[w].utterances_captured,
+    color: COLOR[w], hub: false, subject: w === "A1_JAKE" });
+  bloom = null; hl = null;
+  if (curUser) {
     // ego star: hub big at origin; satellites ring it, distance inverts strength
-    const hub = D.users[curUser];
-    els.push({ data: { id: CODE[curUser], name: NAME[curUser], wearer: curUser,
-                       own: hub.own_utterances, captured: hub.utterances_captured,
-                       hub: 1, subject: curUser === "A1_JAKE" ? 1 : 0 },
-               position: { x: 0, y: 0 }});
+    const hub = mkNode(curUser);
+    hub.hub = true; hub.x = 0; hub.y = 0; hub.fx = 0; hub.fy = 0;
+    nodes.push(hub);
     const others = WEARERS.filter(w => w !== curUser);
+    const morph = prevEgoHub === curUser;
+    const anim = [];
     others.forEach((w, i) => {
       const p = pairMetrics(curUser, w);
-      const v = METRICS[metric].get(p), norm = v / mx;
-      const ang = (i / others.length) * 2 * Math.PI - Math.PI / 2;
-      const rad = 460 - 300 * norm;                    // stronger -> closer to hub
-      const u = D.users[w];
-      els.push({ data: { id: CODE[w], name: NAME[w], wearer: w,
-                         own: u.own_utterances, captured: u.utterances_captured,
-                         norm, subject: w === "A1_JAKE" ? 1 : 0 },
-                 position: { x: rad * Math.cos(ang), y: rad * Math.sin(ang) }});
-      els.push({ data: { id: "p" + p.key, source: CODE[curUser], target: CODE[w],
-                         pair: p.key, v, norm, ego: 1 }});
+      const v = METRICS[metric].get(p), norm = v/mx;
+      const ang = (i/others.length)*2*Math.PI - Math.PI/2;
+      const n = mkNode(w);
+      n.rad = 460 - 300*norm;
+      n.tx = n.rad*Math.cos(ang); n.ty = n.rad*Math.sin(ang);
+      const o = prev[n.id];
+      const st = morph && o && o.x != null ? { x: o.x, y: o.y } : { x: 0, y: 0 };
+      n.x = st.x; n.y = st.y; n.fx = st.x; n.fy = st.y;
+      anim.push({ ref: n, sx: st.x, sy: st.y });
+      nodes.push(n);
+      links.push({ source: CODE[p.w1], target: CODE[p.w2], pair: p.key,
+                   dir: "f", flow: p.r12/maxDir, v, norm });
+      links.push({ source: CODE[p.w2], target: CODE[p.w1], pair: p.key,
+                   dir: "b", flow: p.r21/maxDir, v, norm });
     });
+    bloom = { t0: performance.now(), nodes: anim };
+  } else {
+    // group mesh: everyone equal, force layout clusters strong pairs together
+    for (const w of WEARERS) {
+      const n = mkNode(w), o = prev[n.id];
+      if (o && o.x != null) { n.x = o.x; n.y = o.y; n.vx = o.vx; n.vy = o.vy; }
+      if (n.subject) { n.fx = 0; n.fy = 0; if (n.x == null) { n.x = 0; n.y = 0; } }
+      nodes.push(n);
+    }
+    for (const p of PAIRS) {
+      const v = METRICS[metric].get(p), norm = v/mx;
+      links.push({ source: CODE[p.w1], target: CODE[p.w2], pair: p.key,
+                   dir: "f", flow: p.r12/maxDir, v, norm });
+      links.push({ source: CODE[p.w2], target: CODE[p.w1], pair: p.key,
+                   dir: "b", flow: p.r21/maxDir, v, norm });
+    }
   }
-  if (cy) cy.destroy();
-  cy = cytoscape({
-    container: $("#cy"), elements: els, wheelSensitivity: 0.25,
-    minZoom: 0.3, maxZoom: 5,
-    layout: curUser ? { name: "preset" }
-                    : { name: "cose", animate: false, nodeRepulsion: 9000,
-                        idealEdgeLength: e => 220 - 140 * e.data("norm"),
-                        edgeElasticity: 50 },
-    style: CY_STYLE,
-  });
-  cy.fit(undefined, curUser ? 110 : 60);
-  cy.on("zoom", () => {
-    if (curUser) return;                               // ego labels always on
-    const t = cy.zoom() > 0.75 ? 1 : 0;
-    cy.edges().forEach(e => { if (e.style("text-opacity") != t) e.style("text-opacity", t); });
-  });
-  cy.on("tap", "node", ev => focusNode(ev.target));
-  cy.on("tap", "edge", ev => focusEdge(ev.target));
-  cy.on("tap", ev => { if (ev.target === cy) resetView(); });
+  graphNodes = nodes;
+  if (!G) initGraph();
+  G.graphData({ nodes, links });
+  if (curUser) {
+    G.enableNodeDrag(false);
+    prevEgoHub = curUser;
+    egoCamera(600);
+  } else {
+    G.enableNodeDrag(true);
+    G.d3Force("link").distance(l => 220 - 140*l.norm);
+    G.d3Force("charge").strength(-500);
+    G.d3ReheatSimulation();
+    fitPending = true;
+    prevEgoHub = null;
+  }
+  renderLegend();
 }
 
 function setUser(w) {
@@ -356,34 +667,39 @@ function setMetric(m) {
   if (curUser) showUser(curUser); else showOverview();
 }
 document.querySelectorAll(".mbtn[data-m]").forEach(b => b.onclick = () => setMetric(b.dataset.m));
-$("#fit").onclick = () => { cy.animate({ fit: { padding: 60 } }, { duration: 300 }); };
+$("#fit").onclick = () => { if (curUser) egoCamera(300); else G.zoomToFit(300, 60); };
 
 // ---------- focus / detail ----------
-function hilite(eles) {
-  cy.elements().addClass("faded").removeClass("hi");
-  eles.removeClass("faded").addClass("hi");
-}
 function resetView() {
-  cy.elements().removeClass("faded hi");
-  cy.animate({ fit: { padding: curUser ? 110 : 60 } }, { duration: 300 });
-  if (curUser) showUser(curUser); else showOverview();
+  hl = null;
+  refreshParticles();
+  if (curUser) { egoCamera(); showUser(curUser); }
+  else { G.zoomToFit(400, 60); showOverview(); }
 }
 function focusNode(n) {
-  if (curUser && !n.data("hub")) {
+  if (curUser && !n.hub) {
     // ego mode: tapping an orbit node zooms into that pair link
-    const e = cy.edges().filter(x => x.connectedNodes().contains(n))[0];
-    if (e.nonempty()) { focusEdge(e); return; }
+    focusEdge(pairKey(curUser, n.wearer));
+    return;
   }
-  const hood = n.closedNeighborhood();
-  hilite(hood);
-  cy.animate({ fit: { eles: hood, padding: 90 } }, { duration: 400 });
-  showUser(n.data("wearer"));
+  const ids = new Set([n.id]), pairs = new Set();
+  for (const p of PAIRS) if (p.w1 === n.wearer || p.w2 === n.wearer) {
+    pairs.add(p.key); ids.add(CODE[p.w1]); ids.add(CODE[p.w2]);
+  }
+  hl = { nodes: ids, pairs };
+  refreshParticles();
+  G.centerAt(n.x, n.y, 600);
+  G.zoom(Math.min(G.zoom()*1.4, 4), 600);
+  showUser(n.wearer);
 }
-function focusEdge(e) {
-  const g = e.union(e.connectedNodes());
-  hilite(g);
-  cy.animate({ fit: { eles: g, padding: 140 } }, { duration: 400 });
-  showPair(PAIRS.find(x => x.key === e.data("pair")));   // PAIRS carries .bond
+function focusEdge(key) {
+  const p = PAIRS.find(x => x.key === key);
+  if (!p) return;
+  const c1 = CODE[p.w1], c2 = CODE[p.w2];
+  hl = { nodes: new Set([c1, c2]), pairs: new Set([key]) };
+  refreshParticles();
+  G.zoomToFit(600, 140, n => n.id === c1 || n.id === c2);
+  showPair(p);
 }
 
 // ---------- inspector renderers ----------
@@ -418,17 +734,14 @@ function pairTable(sortKey) {
       <span class="v">${METRICS[metric].fmt(METRICS[metric].get(p))}</span></div>`).join("");
 }
 function bindPairRows() {
-  document.querySelectorAll(".pairrow").forEach(r => r.onclick = () => {
-    const e = cy.getElementById("p" + r.dataset.p);
-    if (e.nonempty()) focusEdge(e);
-  });
+  document.querySelectorAll(".pairrow").forEach(r => r.onclick = () => focusEdge(r.dataset.p));
 }
 
 function groupRhythm() {
   const acc = {};
   for (const w of WEARERS)
     for (const [h, v] of Object.entries(D.users[w].hourly)) {
-      acc[h] = acc[h] || [0,0]; acc[h][0] += v.captured; acc[h][1] += v.own;
+      acc[h] = acc[h] || { captured: 0, own: 0 }; acc[h].captured += v.captured; acc[h].own += v.own;
     }
   return bar({ hourly: acc });
 }
@@ -452,9 +765,19 @@ function showOverview() {
       influences are what his recorder heard. Everyone else's recordings serve as
       supporting evidence: how the people around Jake actually behaved. Anything
       that happened away from Jake's mic is invisible to his graph.</div>
+    <h3>theories — tested against the data</h3>
+    <div class="legendrow" style="margin-bottom:6px">each claim names the bias that could fake it,
+      then gets checked against the other five recorders</div>
+    ${THEORIES.map(t => `<div class="theory">
+      <div class="claim">${t.claim}<span class="verdict ${t.verdict}">${t.verdict.toUpperCase()}</span></div>
+      <div class="row"><span class="lbl">bias to rule out</span><br>${t.bias}</div>
+      <div class="row"><span class="lbl">cross-check</span><br>${t.check}</div>
+      <div class="row"><span class="lbl">verdict</span><br>${t.verdictText}</div>
+      <div class="forjake"><span class="lbl">for jake</span><br>${t.forJake}</div>
+    </div>`).join("")}
     <h3>the conclusions</h3>
-    ${roster.map(w => `<div class="pairrow" data-u="${w}">
-      <span style="color:${COLOR[w]}"><b>${NAME[w]}</b> — ${roleTag(w)}</span>
+    ${roster.map((w, i) => `<div class="pairrow" data-u="${w}">
+      <span style="color:${COLOR[w]}"><span class="rn">0${i + 1}</span><b>${NAME[w]}</b> — ${roleTag(w)}</span>
       <span class="v">${userBond(w)}/100</span></div>`).join("")}
     <div class="note">Strongest bond: <b>${NAME[best.w1]} ⇄ ${NAME[best.w2]}</b>
       (${best.bond}/100 blended, ${best.shared.toLocaleString()} shared moments over ${best.span}h).</div>
