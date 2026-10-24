@@ -36,6 +36,10 @@
   .mention { font-size:12px; margin:3px 0; }
   .mention .tag { display:inline-block; font-size:10px; padding:0 5px; border-radius:4px; background:#21262d; color:var(--blue); margin-right:5px; }
   #tracebtn { width:100%; margin-top:10px; padding:7px; background:var(--accent); color:#0d1117; border:none; border-radius:6px; font-weight:700; cursor:pointer; font-size:13px; }
+  #playev { width:100%; margin-top:6px; padding:7px; background:#21262d; color:var(--blue); border:1px solid var(--border); border-radius:6px; font-weight:700; cursor:pointer; font-size:13px; }
+  .playbtn { background:none; border:none; color:var(--blue); cursor:pointer; font-size:11px; padding:0 5px 0 0; }
+  .playbtn:hover { color:var(--accent); }
+  .utt.playing, .chainhop .q.playing { border-left-color:var(--accent); background:#1c2128; }
   #legend { position:absolute; left:12px; bottom:12px; background:rgba(22,27,34,.94); border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-size:11px; z-index:10; max-width:300px; }
   #legend .sw { display:inline-block; width:26px; height:0; border-top:3px solid; margin:0 6px 2px 0; vertical-align:middle; }
   #goalbar, #peoplebar { display:flex; gap:6px; overflow-x:auto; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--border); font-size:12px; }
@@ -99,7 +103,45 @@ let lastData = null;
 
 async function api(p) { const r = await fetch(p); return r.json(); }
 
+// ---------- audio playback of original EgoLife audio ----------
+let audioOK = false, player = new Audio(), curBtn = null, queue = [];
+async function checkAudio() {
+  try { const s = await api("/api/audio/status"); audioOK = !!s.available; } catch(e) {}
+}
+function stopAudio() {
+  player.pause(); player.src = ""; queue = [];
+  if (curBtn) { curBtn.textContent = "▶"; curBtn.closest(".utt,.q")?.classList.remove("playing"); curBtn = null; }
+}
+function playUtt(uid, btn) {
+  if (curBtn === btn && btn && !player.paused) { stopAudio(); return; }
+  stopAudio(); queue = queue.filter(q => q !== uid);   // keep queued clips after this manual play
+  player.src = `/api/audio/${uid}`;
+  player.play().catch(() => {});
+  curBtn = btn;
+  if (btn) { btn.textContent = "⏸"; btn.closest(".utt,.q")?.classList.add("playing"); }
+}
+player.onended = () => {
+  const nxt = queue.shift();
+  if (curBtn) { curBtn.textContent = "▶"; curBtn.closest(".utt,.q")?.classList.remove("playing"); curBtn = null; }
+  if (nxt != null) playUtt(nxt, document.querySelector(`.playbtn[data-uid="${nxt}"]`));
+};
+async function playEvent(eid) {
+  const d = await api(`/api/audio/event/${eid}`);
+  if (!d.clips || !d.clips.length) return;
+  stopAudio();
+  queue = d.clips.map(c => c.uid);
+  const first = queue.shift();
+  playUtt(first, document.querySelector(`.playbtn[data-uid="${first}"]`));
+}
+function bindPlayButtons(root) {
+  if (!audioOK) return;
+  root.querySelectorAll(".playbtn").forEach(b =>
+    b.onclick = ev => { ev.stopPropagation(); playUtt(+b.dataset.uid, b); });
+}
+const pbtn = u => audioOK ? `<button class="playbtn" data-uid="${u}">▶</button>` : "";
+
 async function loadStats() {
+  checkAudio();
   const s = await api("/api/stats");
   $("#stats").textContent =
     `${s.nodes.utterances} utterances · ${s.nodes.events} events · ` +
@@ -216,10 +258,11 @@ function updateVisibility() {
 }
 
 async function inspect(eid) {
+  stopAudio();
   const e = await api(`/api/event/${eid}`);
   const insp = $("#inspector");
   const utts = e.utterances.map(u =>
-    `<div class="utt"><b>${u.hms} ${u.speaker}</b> ${u.text_en || ""}` +
+    `<div class="utt">${pbtn(u.id)}<b>${u.hms} ${u.speaker}</b> ${u.text_en || ""}` +
     (u.text_zh ? `<span class="zh">${u.text_zh}</span>` : "") + `</div>`).join("");
   const men = e.mentions.map(m =>
     `<div class="mention"><span class="tag">${m.type}</span>${m.speaker}: ${m.text}` +
@@ -249,11 +292,15 @@ async function inspect(eid) {
       ${e.goals.length ? `<br>goals: ${e.goals.map(g => `<a href="#" data-goal="${g.id}" style="color:#bc8cff">${g.canonical}</a>`).join(", ")}` : ""}
     </div>
     <button id="tracebtn">⟲ Trace back to earliest root</button>
+    ${audioOK ? `<button id="playev">▶ play event audio</button>` : ""}
     <h3>evidence (${e.utterances.length} utterances)</h3>${utts}
     <h3>extracted (${e.mentions.length})</h3>${men || "<span style='color:var(--dim)'>none</span>"}
     <h3>edges out (${e.edges_out.length})</h3>${e.edges_out.map(edgeCard).join("") || "—"}
     <h3>edges in (${e.edges_in.length})</h3>${e.edges_in.map(edgeCard).join("") || "—"}`;
   insp.querySelector("#tracebtn").onclick = () => trace(eid);
+  const pe = insp.querySelector("#playev");
+  if (pe) pe.onclick = () => playEvent(eid);
+  bindPlayButtons(insp);
   insp.querySelectorAll(".edgecard").forEach(c => c.onclick = () => {
     const id = c.dataset.node;
     const n = cy.getElementById(id);
@@ -265,6 +312,7 @@ async function inspect(eid) {
 }
 
 async function trace(eid) {
+  stopAudio();
   const d = await api(`/api/chain?event_id=${eid}`);
   cy.elements().removeClass("chain");
   const insp = $("#inspector");
@@ -277,11 +325,12 @@ async function trace(eid) {
     cy.edges().filter(e => e.data("source") === nid && e.data("target") === prev).addClass("chain");
     prev = nid;
     const quotes = h.quotes.map(q =>
-      `<div class="q"><b>${q.hms} ${q.speaker}</b>: ${q.text_en || q.text_zh || ""}</div>`).join("");
+      `<div class="q">${pbtn(q.id)}<b>${q.hms} ${q.speaker}</b>: ${q.text_en || q.text_zh || ""}</div>`).join("");
     html += `<div class="chainhop"><span class="r">${h.relation}</span> · day ${h.day} · conf ${h.confidence ?? "—"} · ${h.status}
       <br>${h.summary}${h.rationale ? `<div class="q">${h.rationale}</div>` : ""}${quotes}</div>`;
   }
   insp.innerHTML = html + `<button id="tracebtn" onclick="inspect(${eid})">← back to event</button>`;
+  bindPlayButtons(insp);
   const root = cy.getElementById(prev);
   if (root.nonempty()) cy.animate({fit: {eles: cy.elements(".chain"), padding: 80}}, {duration: 500});
 }

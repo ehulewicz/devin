@@ -307,6 +307,39 @@ def search(q: str, subject: str = "A1_JAKE", k: int = 12):
             for s, e in scored]
 
 
+@app.get("/api/audio/status")
+def audio_status():
+    from cde import audio
+    return audio.status()
+
+
+@app.get("/api/audio/event/{eid}")
+def audio_event(eid: int):
+    """Playlist for sequential playback of an event's utterance clips."""
+    c = con()
+    rows = [dict(r) for r in c.execute(
+        """SELECT u.id, u.hms, u.speaker, u.text_en, u.t_abs, u.t_end
+           FROM utterances u JOIN event_utterances eu ON eu.utterance_id=u.id
+           WHERE eu.event_id=? ORDER BY u.t_abs""", (eid,))]
+    c.close()
+    return {"event_id": eid,
+            "clips": [{"uid": r["id"], "speaker": r["speaker"], "hms": r["hms"],
+                       "text": r["text_en"],
+                       "dur": round((r["t_end"] or r["t_abs"]) - r["t_abs"] + 0.8, 2)}
+                      for r in rows]}
+
+
+@app.get("/api/audio/{uid}")
+def audio_clip(uid: int):
+    from cde import audio
+    c = con()
+    path = audio.clip_for_utterance(c, uid)
+    c.close()
+    if not path:
+        return {"error": "no media for this utterance"}, 404
+    return FileResponse(path, media_type="audio/aac")
+
+
 @app.get("/")
 def index():
     return FileResponse(os.path.join(WEB, "index.html"))
