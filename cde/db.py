@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS goal_state(
     PRIMARY KEY(goal_entity_id, day)
 );
 
+CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v BLOB);
+
 -- stretch
 CREATE TABLE IF NOT EXISTS patterns(
     id INTEGER PRIMARY KEY,

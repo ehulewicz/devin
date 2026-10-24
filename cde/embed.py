@@ -28,7 +28,7 @@ def _hash_token(tok):
 
 
 def tfidf_fit(texts):
-    """Fit idf over corpus, return list of L2-normalized float32 vectors."""
+    """Fit idf over corpus; return (vectors, idf). Vectors L2-normalized."""
     docs = []
     df = np.zeros(DIM, dtype=np.float64)
     for t in texts:
@@ -42,9 +42,17 @@ def tfidf_fit(texts):
             df[h] += 1
     n = max(len(texts), 1)
     idf = np.log((1 + n) / (1 + df)) + 1.0
+    return tfidf_transform(texts, idf), idf
+
+
+def tfidf_transform(texts, idf):
     out = []
-    for tf in docs:
+    for t in texts:
         v = np.zeros(DIM, dtype=np.float32)
+        tf = {}
+        for tok in TOKEN.findall((t or "").lower()):
+            h = _hash_token(tok)
+            tf[h] = tf.get(h, 0) + 1.0
         for h, c in tf.items():
             v[h] = (1 + np.log(c)) * idf[h]
         norm = np.linalg.norm(v)
@@ -54,14 +62,50 @@ def tfidf_fit(texts):
     return out
 
 
-def embed_texts(texts):
-    """OpenAI embeddings if available, else hashed TF-IDF."""
+def _save_idf(con, idf):
+    con.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v BLOB)")
+    con.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('tfidf_idf',?)",
+                (idf.astype(np.float32).tobytes(),))
+    con.commit()
+
+
+def load_idf(con):
+    try:
+        r = con.execute("SELECT v FROM meta WHERE k='tfidf_idf'").fetchone()
+    except Exception:
+        return None
+    return np.frombuffer(r["v"], dtype=np.float32) if r else None
+
+
+def embed_texts(texts, con=None):
+    """OpenAI embeddings if available, else hashed TF-IDF (idf persisted in meta)."""
     vecs = llm.embed(texts)
     if vecs is not None:
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms[norms == 0] = 1
         return [v / n for v, n in zip(vecs, norms)]
-    return tfidf_fit(texts)
+    if con is not None:
+        idf = load_idf(con)
+        if idf is not None:
+            return tfidf_transform(texts, idf)
+    vs, idf = tfidf_fit(texts)
+    if con is not None:
+        _save_idf(con, idf)
+    return vs
+
+
+def embed_query(texts, con):
+    """Query-time embedding: reuse stored idf so vectors share the corpus space."""
+    vecs = llm.embed(texts)
+    if vecs is not None:
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        return [v / n for v, n in zip(vecs, norms)]
+    idf = load_idf(con)
+    if idf is None:
+        vs, _ = tfidf_fit(texts)
+        return vs
+    return tfidf_transform(texts, idf)
 
 
 def blob(v):
@@ -117,13 +161,25 @@ def main():
     ):
         people.setdefault(r["event_id"], []).append(r["canonical"])
     texts = [event_text(ev, topics.get(ev["id"], []), people.get(ev["id"], [])) for ev in events]
-    vecs = embed_texts(texts)
+    oa = llm.embed(texts)
+    if oa is not None:
+        norms = np.linalg.norm(oa, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        vecs = [v / n for v, n in zip(oa, norms)]
+    else:
+        vecs, idf = tfidf_fit(texts)
+        _save_idf(con, idf)
     for ev, v in zip(events, vecs):
         cur.execute("UPDATE events SET embedding=? WHERE id=?", (blob(v), ev["id"]))
     con.commit()
     print(f"embedded {len(events)} events")
 
     # 2) goal resolution: cluster GOAL mentions into canonical GOAL entities
+    cur.execute("DELETE FROM event_entities WHERE relation='goal'")
+    cur.execute("DELETE FROM entity_aliases WHERE entity_id IN (SELECT id FROM entities WHERE type='GOAL')")
+    cur.execute("DELETE FROM goal_state")
+    cur.execute("DELETE FROM entities WHERE type='GOAL'")
+    cur.execute("UPDATE mentions SET payload_json=json_remove(payload_json,'$.goal_entity_id') WHERE type='GOAL'")
     goal_mentions = cur.execute(
         "SELECT id, event_id, text FROM mentions WHERE type='GOAL'"
     ).fetchall()

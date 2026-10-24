@@ -1,0 +1,4 @@
+openai>=1.0
+fastapi>=0.110
+uvicorn>=0.29
+numpy>=2.0
